@@ -12,12 +12,16 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
     "@tailwindcss/postcss": "^4.3.3",
+    "@tensorflow-models/blazeface": "^0.1.0",
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs": "^4.22.0",
     "autoprefixer": "^10.5.4",
     "leaflet": "^1.9.4",
     "postcss": "^8.5.26",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-leaflet": "^5.0.0",
+    "react-webcam": "^7.2.0",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {

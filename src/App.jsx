@@ -1,3 +1,4 @@
+import DashcamAI from './DashcamAI';
 import { useEffect, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import L from 'leaflet'
@@ -230,6 +231,9 @@ export default function App() {
               [Test V2X Voice Alert]
             </button>
           </div>
+
+          {/*AI DASHCAM WIDGET ENGINES - FLOATING BOTTOM RIGHT */}
+          <DashcamAI />
           
           {alertActive && (
             <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[999] bg-red-600 text-white p-6 rounded-xl shadow-2xl animate-pulse text-2xl font-black border-4 border-yellow-400 text-center w-[90%] max-w-lg">
