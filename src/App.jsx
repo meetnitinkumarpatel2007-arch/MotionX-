@@ -46,7 +46,7 @@ export default function App() {
     if (data) setMyProfile(data)
   }
 
-  // Live Tracking Sync
+  // Live Tracking Sync - UPGRADED FOR MOBILE GPS
   useEffect(() => {
     if (!session || !myProfile) return
 
@@ -56,7 +56,12 @@ export default function App() {
       await supabase.from('profiles').update({ lat: latitude, lng: longitude }).eq('id', session.user.id)
     }
 
-    const watchId = navigator.geolocation.watchPosition(handleSuccess, (err) => console.log("GPS Waiting..."), { enableHighAccuracy: true, timeout: 5000 })
+    // Increased timeout to 30 seconds and allowed cached locations to help mobile phones load faster
+    const watchId = navigator.geolocation.watchPosition(
+      handleSuccess, 
+      (err) => console.warn("GPS Warning:", err.message), 
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
+    )
 
     const sub = supabase.channel('public:profiles')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
@@ -83,17 +88,16 @@ export default function App() {
 
     activeAmbulances.forEach(amb => {
       if (amb.lat && amb.lng && myProfile.lat && myProfile.lng) {
-        if (getDistance(myProfile.lat, myProfile.lng, amb.lat, amb.lng) < 500) isDanger = true
+        if (getDistance(myProfile.lat, myProfile.lng, amb.lat, amb.lng) < 600) isDanger = true
       }
     })
 
     if (isDanger && !alertActive) {
-      // Execute Voice Alert Twice
       const msg = "Ambulance approaching, please clear overtaking lane."
       window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
       setTimeout(() => {
         window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
-      }, 3500) // Waits 3.5 seconds before repeating
+      }, 3500)
     }
     setAlertActive(isDanger)
   }, [allUsers, myProfile, alertActive])
@@ -104,13 +108,12 @@ export default function App() {
     await supabase.from('profiles').update({ is_emergency: newState }).eq('id', session.user.id)
     setMyProfile({ ...myProfile, is_emergency: newState })
     
-    // Draw visual route to hospital coordinates
-    setHospitalRoute(newState && myProfile.lat ? [[myProfile.lat, myProfile.lng], [myProfile.lat + 0.012, myProfile.lng + 0.012]] : null)
+    // Sola Civil Hospital Coordinates
+    const SOLA_HOSPITAL_COORDS = [23.0785, 72.5285];
+    setHospitalRoute(newState && myProfile.lat ? [[myProfile.lat, myProfile.lng], SOLA_HOSPITAL_COORDS] : null)
   }
 
-  // Force Override - Bulletproof database fix
   const triggerOverride = async () => {
-    // If the database forgot their role, default to what they likely selected
     const activeRole = myProfile?.role || 'emergency'; 
     const mockLat = activeRole === 'emergency' ? 23.0650 : 23.0625; 
     const mockLng = activeRole === 'emergency' ? 72.5350 : 72.5314;
@@ -118,7 +121,7 @@ export default function App() {
     const updatedProfile = { 
       ...myProfile, 
       role: activeRole, 
-      plate_number: myProfile?.plate_number || 'DEMO-911',
+      plate_number: myProfile?.plate_number || (activeRole === 'emergency' ? 'AMB-911' : 'GJ-01-XX'),
       lat: mockLat, 
       lng: mockLng 
     };
@@ -129,27 +132,48 @@ export default function App() {
       await supabase.from('profiles').upsert({ 
         id: session.user.id, 
         role: activeRole,
+        plate_number: updatedProfile.plate_number,
         lat: mockLat, 
         lng: mockLng 
       });
     }
   }
 
+  // Manual GPS Trigger for stubborn mobile browsers
+  const forceRealGPS = () => {
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        setMyProfile(prev => ({ ...prev, lat: latitude, lng: longitude }));
+        await supabase.from('profiles').update({ lat: latitude, lng: longitude }).eq('id', session.user.id);
+      },
+      (err) => alert("GPS Failed: " + err.message + " - Please ensure Location Services are enabled in your phone settings."),
+      { enableHighAccuracy: true, timeout: 30000 }
+    )
+  }
+
   if (!session) return <Auth onLogin={(user) => { setSession({ user }); fetchProfile(user.id); }} />
   
   if (!myProfile?.lat) return (
-    <div className="flex flex-col h-screen items-center justify-center bg-gray-100 text-gray-800 font-sans gap-6">
-      <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-600"></div>
-      <div className="text-xl font-bold">Acquiring GPS Signal...</div>
-      <p className="text-gray-500 uppercase font-bold text-sm">Please allow location permissions</p>
-      <button onClick={triggerOverride} className="mt-4 px-8 py-4 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-xl cursor-pointer">
-        FORCE OVERRIDE: LOAD DEMO MAP
+    <div className="flex flex-col h-screen items-center justify-center bg-gray-100 text-gray-800 font-sans gap-4 p-4 text-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-600 mb-2"></div>
+      <div className="text-xl font-bold">Acquiring Secure V2X Network...</div>
+      
+      <button onClick={forceRealGPS} className="w-full max-w-sm mt-4 px-6 py-4 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-xl cursor-pointer">
+        ALLOW LOCATION (REAL GPS)
+      </button>
+      
+      <p className="text-gray-500 font-bold text-sm my-2">OR</p>
+
+      <button onClick={triggerOverride} className="w-full max-w-sm px-6 py-4 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-xl cursor-pointer">
+        FORCE OVERRIDE (DEMO MAP)
       </button>
     </div>
   )
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
+      {/* ... [Rest of the return statement remains exactly the same] ... */}
       
       {/* PRIVATE DASHBOARD */}
       {myProfile.role === 'private' && (
@@ -171,7 +195,7 @@ export default function App() {
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[999] bg-white p-6 rounded-2xl shadow-2xl w-[90%] max-w-lg text-center border-t-4 border-red-600">
           <h2 className="font-black text-gray-900 text-2xl mb-1 uppercase">UNIT: {myProfile.plate_number}</h2>
           <p className={`font-bold mb-4 ${myProfile.is_emergency ? 'text-red-600 animate-pulse' : 'text-gray-500'}`}>
-            {myProfile.is_emergency ? 'ROUTING TO NEAREST HOSPITAL...' : 'STANDBY MODE'}
+            {myProfile.is_emergency ? 'ROUTING TO SOLA CIVIL HOSPITAL...' : 'STANDBY MODE'}
           </p>
           <button 
             onClick={toggleEmergency}
@@ -183,12 +207,12 @@ export default function App() {
       )}
 
       {/* LEAFLET MAP */}
-      <MapContainer center={[myProfile.lat, myProfile.lng]} zoom={15} style={{ height: '100%', width: '100%', zIndex: 1 }}>
+      <MapContainer center={[myProfile.lat, myProfile.lng]} zoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         
         {/* Hospital Route Line */}
         {hospitalRoute && myProfile.role === 'emergency' && (
-          <Polyline positions={hospitalRoute} color="red" weight={8} opacity={0.7} dashArray="10, 10" />
+          <Polyline positions={hospitalRoute} color="#dc2626" weight={8} opacity={0.8} dashArray="10, 10" />
         )}
         
         {allUsers.map(user => (
