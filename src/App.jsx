@@ -5,16 +5,20 @@ import { supabase } from './supabaseClient'
 import Auth from './Auth'
 import 'leaflet/dist/leaflet.css'
 
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
-import markerShadow from 'leaflet/dist/images/marker-shadow.png'
+// HACKATHON FIX: Custom Emoji Markers that never break on Vercel!
+const emergencyIcon = L.divIcon({
+  className: 'custom-icon',
+  html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #dc2626; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚑</div>',
+  iconSize: [46, 46],
+  iconAnchor: [23, 46]
+});
 
-let DefaultIcon = L.icon({
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41]
-})
-L.Marker.prototype.options.icon = DefaultIcon
+const privateIcon = L.divIcon({
+  className: 'custom-icon',
+  html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #2563eb; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚘</div>',
+  iconSize: [46, 46],
+  iconAnchor: [23, 46]
+});
 
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3
@@ -46,22 +50,9 @@ export default function App() {
     if (data) setMyProfile(data)
   }
 
-  // Live Tracking Sync - UPGRADED FOR MOBILE GPS
+  // Live Tracking Sync 
   useEffect(() => {
-    if (!session || !myProfile) return
-
-    const handleSuccess = async (pos) => {
-      const { latitude, longitude } = pos.coords
-      setMyProfile(prev => ({ ...prev, lat: latitude, lng: longitude }))
-      await supabase.from('profiles').update({ lat: latitude, lng: longitude }).eq('id', session.user.id)
-    }
-
-    // Increased timeout to 30 seconds and allowed cached locations to help mobile phones load faster
-    const watchId = navigator.geolocation.watchPosition(
-      handleSuccess, 
-      (err) => console.warn("GPS Warning:", err.message), 
-      { enableHighAccuracy: true, timeout: 30000, maximumAge: 10000 }
-    )
+    if (!session || !myProfile?.lat) return
 
     const sub = supabase.channel('public:profiles')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
@@ -74,11 +65,8 @@ export default function App() {
 
     supabase.from('profiles').select('*').then(({ data }) => setAllUsers(data || []))
 
-    return () => {
-      navigator.geolocation.clearWatch(watchId)
-      supabase.removeChannel(sub)
-    }
-  }, [session, myProfile?.id])
+    return () => { supabase.removeChannel(sub) }
+  }, [session, myProfile?.lat])
 
   // V2X Proximity Alert & Double Voice Command
   useEffect(() => {
@@ -108,46 +96,34 @@ export default function App() {
     await supabase.from('profiles').update({ is_emergency: newState }).eq('id', session.user.id)
     setMyProfile({ ...myProfile, is_emergency: newState })
     
-    // Sola Civil Hospital Coordinates
     const SOLA_HOSPITAL_COORDS = [23.0785, 72.5285];
     setHospitalRoute(newState && myProfile.lat ? [[myProfile.lat, myProfile.lng], SOLA_HOSPITAL_COORDS] : null)
   }
 
-  const triggerOverride = async () => {
-    const activeRole = myProfile?.role || 'emergency'; 
-    const mockLat = activeRole === 'emergency' ? 23.0650 : 23.0625; 
-    const mockLng = activeRole === 'emergency' ? 72.5350 : 72.5314;
+  // Bulletproof Database Recovery for Roles
+  const enforceProfile = async (latitude, longitude, overrideRole = null) => {
+    const activeRole = overrideRole || myProfile?.role || 'emergency'; 
+    const plate = myProfile?.plate_number || (activeRole === 'emergency' ? 'AMB-911' : 'GJ-01-XX');
     
-    const updatedProfile = { 
-      ...myProfile, 
-      role: activeRole, 
-      plate_number: myProfile?.plate_number || (activeRole === 'emergency' ? 'AMB-911' : 'GJ-01-XX'),
-      lat: mockLat, 
-      lng: mockLng 
-    };
-    
+    const updatedProfile = { ...myProfile, role: activeRole, plate_number: plate, lat: latitude, lng: longitude };
     setMyProfile(updatedProfile);
     
     if (session?.user?.id) {
-      await supabase.from('profiles').upsert({ 
-        id: session.user.id, 
-        role: activeRole,
-        plate_number: updatedProfile.plate_number,
-        lat: mockLat, 
-        lng: mockLng 
-      });
+      await supabase.from('profiles').upsert({ id: session.user.id, role: activeRole, plate_number: plate, lat: latitude, lng: longitude });
     }
   }
 
-  // Manual GPS Trigger for stubborn mobile browsers
+  // Force Override (Demo Spawns)
+  const triggerOverride = () => {
+    const isEmergency = (myProfile?.role || 'emergency') === 'emergency';
+    enforceProfile(isEmergency ? 23.0650 : 23.0625, isEmergency ? 72.5350 : 72.5314);
+  }
+
+  // Real GPS with Bulletproof Role Enforcer
   const forceRealGPS = () => {
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const { latitude, longitude } = pos.coords;
-        setMyProfile(prev => ({ ...prev, lat: latitude, lng: longitude }));
-        await supabase.from('profiles').update({ lat: latitude, lng: longitude }).eq('id', session.user.id);
-      },
-      (err) => alert("GPS Failed: " + err.message + " - Please ensure Location Services are enabled in your phone settings."),
+      (pos) => enforceProfile(pos.coords.latitude, pos.coords.longitude),
+      (err) => alert("GPS Error: " + err.message),
       { enableHighAccuracy: true, timeout: 30000 }
     )
   }
@@ -158,14 +134,11 @@ export default function App() {
     <div className="flex flex-col h-screen items-center justify-center bg-gray-100 text-gray-800 font-sans gap-4 p-4 text-center">
       <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-600 mb-2"></div>
       <div className="text-xl font-bold">Acquiring Secure V2X Network...</div>
-      
-      <button onClick={forceRealGPS} className="w-full max-w-sm mt-4 px-6 py-4 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-xl cursor-pointer">
+      <button onClick={forceRealGPS} className="w-full max-w-sm mt-4 px-6 py-4 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-xl">
         ALLOW LOCATION (REAL GPS)
       </button>
-      
       <p className="text-gray-500 font-bold text-sm my-2">OR</p>
-
-      <button onClick={triggerOverride} className="w-full max-w-sm px-6 py-4 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-xl cursor-pointer">
+      <button onClick={triggerOverride} className="w-full max-w-sm px-6 py-4 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-xl">
         FORCE OVERRIDE (DEMO MAP)
       </button>
     </div>
@@ -173,7 +146,6 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
-      {/* ... [Rest of the return statement remains exactly the same] ... */}
       
       {/* PRIVATE DASHBOARD */}
       {myProfile.role === 'private' && (
@@ -199,7 +171,7 @@ export default function App() {
           </p>
           <button 
             onClick={toggleEmergency}
-            className={`w-full py-4 text-xl font-extrabold rounded-xl transition-all shadow-lg text-white cursor-pointer ${myProfile.is_emergency ? 'bg-gray-800 hover:bg-gray-900' : 'bg-red-600 hover:bg-red-700'}`}
+            className={`w-full py-4 text-xl font-extrabold rounded-xl transition-all shadow-lg text-white ${myProfile.is_emergency ? 'bg-gray-800' : 'bg-red-600'}`}
           >
             {myProfile.is_emergency ? 'DEACTIVATE EMERGENCY' : 'ACTIVATE EMERGENCY ROUTE'}
           </button>
@@ -210,14 +182,19 @@ export default function App() {
       <MapContainer center={[myProfile.lat, myProfile.lng]} zoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         
-        {/* Hospital Route Line */}
         {hospitalRoute && myProfile.role === 'emergency' && (
           <Polyline positions={hospitalRoute} color="#dc2626" weight={8} opacity={0.8} dashArray="10, 10" />
         )}
+
+        {/* YOUR OWN MARKER */}
+        <Marker position={[myProfile.lat, myProfile.lng]} icon={myProfile.role === 'emergency' ? emergencyIcon : privateIcon}>
+          <Popup><strong>{myProfile.plate_number} (YOU)</strong></Popup>
+        </Marker>
         
-        {allUsers.map(user => (
+        {/* OTHER VEHICLES MARKERS */}
+        {allUsers.filter(u => u.id !== session.user.id).map(user => (
           user.lat && user.lng && (
-            <Marker key={user.id} position={[user.lat, user.lng]}>
+            <Marker key={user.id} position={[user.lat, user.lng]} icon={user.role === 'emergency' ? emergencyIcon : privateIcon}>
               <Popup>
                 <div className="text-center">
                   <strong className="text-lg uppercase">{user.plate_number}</strong><br/>
