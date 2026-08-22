@@ -5,7 +5,7 @@ import { supabase } from './supabaseClient'
 import Auth from './Auth'
 import 'leaflet/dist/leaflet.css'
 
-// HACKATHON FIX: Custom Emoji Markers that never break on Vercel!
+// Custom Emoji Markers
 const emergencyIcon = L.divIcon({
   className: 'custom-icon',
   html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #dc2626; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚑</div>',
@@ -20,6 +20,7 @@ const privateIcon = L.divIcon({
   iconAnchor: [23, 46]
 });
 
+// Math function to calculate distance in meters
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3
   const p1 = lat1 * Math.PI / 180
@@ -31,12 +32,16 @@ function getDistance(lat1, lon1, lat2, lon2) {
   return R * c
 }
 
+// Master coordinates for Sola Civil Hospital
+const SOLA_HOSPITAL_COORDS = [23.0785, 72.5285];
+
 export default function App() {
   const [session, setSession] = useState(null)
   const [myProfile, setMyProfile] = useState(null)
   const [allUsers, setAllUsers] = useState([])
   const [alertActive, setAlertActive] = useState(false)
   const [hospitalRoute, setHospitalRoute] = useState(null)
+  const [isRouting, setIsRouting] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -50,7 +55,7 @@ export default function App() {
     if (data) setMyProfile(data)
   }
 
-  // Live Tracking Sync 
+  // Live Tracking Sync
   useEffect(() => {
     if (!session || !myProfile?.lat) return
 
@@ -68,7 +73,7 @@ export default function App() {
     return () => { supabase.removeChannel(sub) }
   }, [session, myProfile?.lat])
 
-  // V2X Proximity Alert & Double Voice Command
+  // SMART V2X HYBRID ALERT LOGIC (Directional + Circular Proximity)
   useEffect(() => {
     if (myProfile?.role !== 'private') return
     const activeAmbulances = allUsers.filter(u => u.role === 'emergency' && u.is_emergency)
@@ -76,31 +81,61 @@ export default function App() {
 
     activeAmbulances.forEach(amb => {
       if (amb.lat && amb.lng && myProfile.lat && myProfile.lng) {
-        if (getDistance(myProfile.lat, myProfile.lng, amb.lat, amb.lng) < 600) isDanger = true
+        
+        const distAmbToPriv = getDistance(amb.lat, amb.lng, myProfile.lat, myProfile.lng);
+        const distAmbToHosp = getDistance(amb.lat, amb.lng, SOLA_HOSPITAL_COORDS[0], SOLA_HOSPITAL_COORDS[1]);
+        const distPrivToHosp = getDistance(myProfile.lat, myProfile.lng, SOLA_HOSPITAL_COORDS[0], SOLA_HOSPITAL_COORDS[1]);
+
+        // SCENARIO 1: Directional (Car is within 500m AND running ahead of ambulance on the route)
+        const isAheadOnRoute = distAmbToPriv <= 500 && (distPrivToHosp < distAmbToHosp);
+        
+        // SCENARIO 2: Absolute Proximity (Car is within 50m 360-degree radius, covers blind intersections/side streets)
+        const isDangerouslyClose = distAmbToPriv <= 50;
+
+        if (isAheadOnRoute || isDangerouslyClose) {
+          isDanger = true;
+        }
       }
     })
 
+    // Trigger Voice Alert (Only speaks when danger state turns ON)
     if (isDanger && !alertActive) {
-      const msg = "Ambulance approaching, please clear overtaking lane."
+      const msg = "Ambulance approaching, please clear the overtaking lane immediately."
       window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
       setTimeout(() => {
         window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
-      }, 3500)
+      }, 4000) // Speaks second time after 4 seconds
     }
     setAlertActive(isDanger)
   }, [allUsers, myProfile, alertActive])
 
-  // Hospital Routing Button
+  // REAL ROAD ROUTING VIA OSRM API
   const toggleEmergency = async () => {
     const newState = !myProfile.is_emergency
     await supabase.from('profiles').update({ is_emergency: newState }).eq('id', session.user.id)
     setMyProfile({ ...myProfile, is_emergency: newState })
     
-    const SOLA_HOSPITAL_COORDS = [23.0785, 72.5285];
-    setHospitalRoute(newState && myProfile.lat ? [[myProfile.lat, myProfile.lng], SOLA_HOSPITAL_COORDS] : null)
+    if (newState && myProfile.lat && myProfile.lng) {
+      setIsRouting(true)
+      try {
+        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${myProfile.lng},${myProfile.lat};${SOLA_HOSPITAL_COORDS[1]},${SOLA_HOSPITAL_COORDS[0]}?overview=full&geometries=geojson`)
+        const data = await res.json()
+        
+        if (data.routes && data.routes[0]) {
+          const realRoadCoords = data.routes[0].geometry.coordinates.map(coord => [coord[1], coord[0]])
+          setHospitalRoute(realRoadCoords)
+        } else {
+          setHospitalRoute([[myProfile.lat, myProfile.lng], SOLA_HOSPITAL_COORDS])
+        }
+      } catch (err) {
+        setHospitalRoute([[myProfile.lat, myProfile.lng], SOLA_HOSPITAL_COORDS])
+      }
+      setIsRouting(false)
+    } else {
+      setHospitalRoute(null)
+    }
   }
 
-  // Bulletproof Database Recovery for Roles
   const enforceProfile = async (latitude, longitude, overrideRole = null) => {
     const activeRole = overrideRole || myProfile?.role || 'emergency'; 
     const plate = myProfile?.plate_number || (activeRole === 'emergency' ? 'AMB-911' : 'GJ-01-XX');
@@ -113,13 +148,12 @@ export default function App() {
     }
   }
 
-  // Force Override (Demo Spawns)
+  // Force Override (Optimized Spawns for the 500m Math)
   const triggerOverride = () => {
     const isEmergency = (myProfile?.role || 'emergency') === 'emergency';
-    enforceProfile(isEmergency ? 23.0650 : 23.0625, isEmergency ? 72.5350 : 72.5314);
+    enforceProfile(isEmergency ? 23.0550 : 23.0625, isEmergency ? 72.5350 : 72.5314);
   }
 
-  // Real GPS with Bulletproof Role Enforcer
   const forceRealGPS = () => {
     navigator.geolocation.getCurrentPosition(
       (pos) => enforceProfile(pos.coords.latitude, pos.coords.longitude),
@@ -167,10 +201,11 @@ export default function App() {
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[999] bg-white p-6 rounded-2xl shadow-2xl w-[90%] max-w-lg text-center border-t-4 border-red-600">
           <h2 className="font-black text-gray-900 text-2xl mb-1 uppercase">UNIT: {myProfile.plate_number}</h2>
           <p className={`font-bold mb-4 ${myProfile.is_emergency ? 'text-red-600 animate-pulse' : 'text-gray-500'}`}>
-            {myProfile.is_emergency ? 'ROUTING TO SOLA CIVIL HOSPITAL...' : 'STANDBY MODE'}
+            {isRouting ? 'CALCULATING ROUTES...' : (myProfile.is_emergency ? 'ROUTING TO SOLA CIVIL HOSPITAL...' : 'STANDBY MODE')}
           </p>
           <button 
             onClick={toggleEmergency}
+            disabled={isRouting}
             className={`w-full py-4 text-xl font-extrabold rounded-xl transition-all shadow-lg text-white ${myProfile.is_emergency ? 'bg-gray-800' : 'bg-red-600'}`}
           >
             {myProfile.is_emergency ? 'DEACTIVATE EMERGENCY' : 'ACTIVATE EMERGENCY ROUTE'}
@@ -182,8 +217,16 @@ export default function App() {
       <MapContainer center={[myProfile.lat, myProfile.lng]} zoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         
+        {/* Real GPS Road Route Line */}
         {hospitalRoute && myProfile.role === 'emergency' && (
-          <Polyline positions={hospitalRoute} color="#dc2626" weight={8} opacity={0.8} dashArray="10, 10" />
+          <Polyline positions={hospitalRoute} color="#dc2626" weight={8} opacity={0.8} />
+        )}
+
+        {/* Sola Civil Hospital Marker */}
+        {myProfile.is_emergency && (
+          <Marker position={SOLA_HOSPITAL_COORDS}>
+            <Popup><strong>Sola Civil Hospital (Destination)</strong></Popup>
+          </Marker>
         )}
 
         {/* YOUR OWN MARKER */}
