@@ -5,7 +5,7 @@ import { supabase } from './supabaseClient'
 import Auth from './Auth'
 import 'leaflet/dist/leaflet.css'
 
-// Custom Emoji Markers (Bulletproof for Vercel)
+// Custom Emoji Markers
 const emergencyIcon = L.divIcon({
   className: 'custom-icon',
   html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #dc2626; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚑</div>',
@@ -20,7 +20,6 @@ const privateIcon = L.divIcon({
   iconAnchor: [23, 46]
 });
 
-// Math function to calculate distance in meters
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3
   const p1 = lat1 * Math.PI / 180
@@ -38,7 +37,6 @@ export default function App() {
   const [allUsers, setAllUsers] = useState([])
   const [alertActive, setAlertActive] = useState(false)
   
-  // Routing States
   const [targetHospital, setTargetHospital] = useState(null)
   const [hospitalRoute, setHospitalRoute] = useState(null)
   const [isRouting, setIsRouting] = useState(false)
@@ -68,12 +66,23 @@ export default function App() {
         })
       }).subscribe()
 
-    supabase.from('profiles').select('*').then(({ data }) => setAllUsers(data || []))
+    // Fetch initial users to ensure they populate even if realtime is slow
+    const fetchUsers = async () => {
+      const { data } = await supabase.from('profiles').select('*')
+      if (data) setAllUsers(data)
+    }
+    fetchUsers()
 
-    return () => { supabase.removeChannel(sub) }
+    // Refresh user locations every 5 seconds as a fallback if WebSockets are blocked
+    const interval = setInterval(fetchUsers, 5000)
+
+    return () => { 
+      supabase.removeChannel(sub)
+      clearInterval(interval)
+    }
   }, [session, myProfile?.lat])
 
-  // SMART V2X PROXIMITY ALERT (Optimized for dynamic hospitals)
+  // SMART V2X MATH
   useEffect(() => {
     if (myProfile?.role !== 'private') return
     const activeAmbulances = allUsers.filter(u => u.role === 'emergency' && u.is_emergency)
@@ -81,31 +90,34 @@ export default function App() {
 
     activeAmbulances.forEach(amb => {
       if (amb.lat && amb.lng && myProfile.lat && myProfile.lng) {
-        // Triggers flawlessly if any active ambulance is within a 600m radius
-        if (getDistance(amb.lat, amb.lng, myProfile.lat, myProfile.lng) <= 600) {
+        if (getDistance(amb.lat, amb.lng, myProfile.lat, myProfile.lng) <= 1000) {
           isDanger = true;
         }
       }
     })
 
     if (isDanger && !alertActive) {
-      const msg = "Ambulance approaching nearby, please clear the overtaking lane immediately."
-      window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
-      setTimeout(() => {
-        window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
-      }, 4500)
+      triggerAudioAlert()
     }
     setAlertActive(isDanger)
   }, [allUsers, myProfile, alertActive])
 
-  // DYNAMIC NEAREST HOSPITAL SCANNER (Overpass API)
+  // Isolated Audio function to bypass Chrome blocks
+  const triggerAudioAlert = () => {
+    setAlertActive(true)
+    const msg = "Ambulance approaching nearby, please clear the overtaking lane immediately."
+    const utterance = new SpeechSynthesisUtterance(msg)
+    window.speechSynthesis.speak(utterance)
+    setTimeout(() => {
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
+    }, 4500)
+  }
+
   const findNearestHospital = async (lat, lng) => {
     try {
-      // Scans an 8000m (8km) radius for the nearest hospital
       const query = `[out:json];node(around:8000,${lat},${lng})["amenity"="hospital"];out 1;`;
       const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
       const data = await res.json();
-      
       if (data.elements && data.elements.length > 0) {
         const hosp = data.elements[0];
         return { name: hosp.tags?.name || "Nearest Emergency Hospital", coords: [hosp.lat, hosp.lon] };
@@ -113,11 +125,9 @@ export default function App() {
     } catch (err) {
       console.error("Hospital API Failed", err);
     }
-    // Fallback if API fails
     return { name: "Emergency Medical Center (Simulated)", coords: [lat + 0.015, lng + 0.015] };
   }
 
-  // EMERGENCY BUTTON TOGGLE
   const toggleEmergency = async () => {
     const newState = !myProfile.is_emergency
     await supabase.from('profiles').update({ is_emergency: newState }).eq('id', session.user.id)
@@ -134,7 +144,6 @@ export default function App() {
     }
   }
 
-  // DYNAMIC ROAD ROUTING (Automatically recalculates when GPS moves)
   useEffect(() => {
     if (myProfile?.role === 'emergency' && myProfile?.is_emergency && myProfile?.lat && myProfile?.lng && targetHospital) {
       setIsRouting(true)
@@ -150,7 +159,6 @@ export default function App() {
           setIsRouting(false)
         })
         .catch(err => {
-          console.error("Routing Failed", err)
           setHospitalRoute([[myProfile.lat, myProfile.lng], targetHospital.coords])
           setIsRouting(false)
         })
@@ -171,18 +179,12 @@ export default function App() {
     }
   }
 
-  // FORCE OVERRIDE (Dynamically spawns demo near YOUR location, not just Ahmedabad!)
   const triggerOverride = () => {
     const activeRole = myProfile?.role || 'emergency'; 
-    
-    // Default to Gandhinagar coords if real GPS hasn't loaded at all
     const baseLat = myProfile?.lat || 23.2156; 
     const baseLng = myProfile?.lng || 72.6369; 
-
-    // Spawns vehicles within 300m of each other so the alert perfectly triggers
     const mockLat = activeRole === 'emergency' ? baseLat + 0.002 : baseLat; 
     const mockLng = activeRole === 'emergency' ? baseLng + 0.002 : baseLng;
-    
     enforceProfile(mockLat, mockLng);
   }
 
@@ -219,7 +221,16 @@ export default function App() {
           <div className="absolute top-6 left-6 z-[999] bg-white p-4 rounded-xl shadow-xl border-l-4 border-blue-600">
             <h2 className="font-black text-gray-900 text-lg">PRIVATE DASHBOARD</h2>
             <p className="text-gray-600 font-mono text-sm mt-1 uppercase">Plate: {myProfile.plate_number}</p>
+            
+            {/* PITCH LIFESAVER BUTTON: If DB sync fails, click this to manually trigger demo alert */}
+            <button 
+              onClick={triggerAudioAlert} 
+              className="mt-3 text-xs font-bold text-blue-600 underline cursor-pointer hover:text-blue-800"
+            >
+              [Test V2X Voice Alert]
+            </button>
           </div>
+          
           {alertActive && (
             <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[999] bg-red-600 text-white p-6 rounded-xl shadow-2xl animate-pulse text-2xl font-black border-4 border-yellow-400 text-center w-[90%] max-w-lg">
               🚨 AMBULANCE APPROACHING 🚨 <br/> Clear Overtaking Lane!
@@ -249,12 +260,10 @@ export default function App() {
       <MapContainer center={[myProfile.lat, myProfile.lng]} zoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         
-        {/* Real GPS Live-Updating Road Route */}
         {hospitalRoute && myProfile.role === 'emergency' && (
           <Polyline positions={hospitalRoute} color="#dc2626" weight={8} opacity={0.8} />
         )}
 
-        {/* Dynamic Target Hospital Marker */}
         {myProfile.is_emergency && targetHospital && (
           <Marker position={targetHospital.coords}>
             <Popup><strong>{targetHospital.name}</strong></Popup>
