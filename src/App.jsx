@@ -1,35 +1,21 @@
-import DashcamAI from './DashcamAI';
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import L from 'leaflet'
 import { supabase } from './supabaseClient'
 import Auth from './Auth'
+import DashcamAI from './DashcamAI'
+import Peer from 'peerjs'
 import 'leaflet/dist/leaflet.css'
 
-// Custom Emoji Markers
-const emergencyIcon = L.divIcon({
-  className: 'custom-icon',
-  html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #dc2626; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚑</div>',
-  iconSize: [46, 46],
-  iconAnchor: [23, 46]
-});
-
-const privateIcon = L.divIcon({
-  className: 'custom-icon',
-  html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #2563eb; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚘</div>',
-  iconSize: [46, 46],
-  iconAnchor: [23, 46]
-});
+const emergencyIcon = L.divIcon({ className: 'custom-icon', html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #dc2626; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚑</div>', iconSize: [46, 46], iconAnchor: [23, 46]});
+const privateIcon = L.divIcon({ className: 'custom-icon', html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #2563eb; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🚘</div>', iconSize: [46, 46], iconAnchor: [23, 46]});
+const fleetIcon = L.divIcon({ className: 'custom-icon', html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #9333ea; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">🏢</div>', iconSize: [46, 46], iconAnchor: [23, 46]});
+const familyIcon = L.divIcon({ className: 'custom-icon', html: '<div style="font-size: 28px; background: white; border-radius: 50%; padding: 4px; border: 3px solid #22c55e; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">📍</div>', iconSize: [46, 46], iconAnchor: [23, 46]});
 
 function getDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371e3
-  const p1 = lat1 * Math.PI / 180
-  const p2 = lat2 * Math.PI / 180
-  const dp = (lat2 - lat1) * Math.PI / 180
-  const dl = (lon2 - lon1) * Math.PI / 180
-  const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2)
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-  return R * c
+  const R = 6371e3; const p1 = lat1 * Math.PI / 180; const p2 = lat2 * Math.PI / 180; const dp = (lat2 - lat1) * Math.PI / 180; const dl = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
 export default function App() {
@@ -41,6 +27,12 @@ export default function App() {
   const [targetHospital, setTargetHospital] = useState(null)
   const [hospitalRoute, setHospitalRoute] = useState(null)
   const [isRouting, setIsRouting] = useState(false)
+  
+  const [showSosModal, setShowSosModal] = useState(false)
+  const [sosEmailInput, setSosEmailInput] = useState("")
+  
+  const [linkedDriver, setLinkedDriver] = useState(null)
+  const remoteVideoRef = useRef(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -50,190 +42,222 @@ export default function App() {
   }, [])
 
   const fetchProfile = async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
     if (data) setMyProfile(data)
   }
 
-  // Live Tracking Sync
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    window.location.reload();
+  }
+
   useEffect(() => {
     if (!session || !myProfile?.lat) return
-
-    const sub = supabase.channel('public:profiles')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
+    const sub = supabase.channel('public:profiles').on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
         setAllUsers((current) => {
           const exists = current.find(u => u.id === payload.new.id)
           if (exists) return current.map(u => u.id === payload.new.id ? payload.new : u)
           return [...current, payload.new]
         })
       }).subscribe()
-
-    // Fetch initial users to ensure they populate even if realtime is slow
-    const fetchUsers = async () => {
-      const { data } = await supabase.from('profiles').select('*')
-      if (data) setAllUsers(data)
-    }
-    fetchUsers()
-
-    // Refresh user locations every 5 seconds as a fallback if WebSockets are blocked
-    const interval = setInterval(fetchUsers, 5000)
-
-    return () => { 
-      supabase.removeChannel(sub)
-      clearInterval(interval)
-    }
+    supabase.from('profiles').select('*').then(({ data }) => setAllUsers(data || []))
+    return () => supabase.removeChannel(sub)
   }, [session, myProfile?.lat])
 
-  // SMART V2X MATH
   useEffect(() => {
-    if (myProfile?.role !== 'private') return
+    if (myProfile?.role !== 'private' && myProfile?.role !== 'fleet') return
     const activeAmbulances = allUsers.filter(u => u.role === 'emergency' && u.is_emergency)
     let isDanger = false
 
     activeAmbulances.forEach(amb => {
       if (amb.lat && amb.lng && myProfile.lat && myProfile.lng) {
-        if (getDistance(amb.lat, amb.lng, myProfile.lat, myProfile.lng) <= 1000) {
-          isDanger = true;
-        }
+        if (getDistance(amb.lat, amb.lng, myProfile.lat, myProfile.lng) <= 1000) isDanger = true;
       }
     })
 
     if (isDanger && !alertActive) {
-      triggerAudioAlert()
+      const msg = "Ambulance approaching nearby, please clear the overtaking lane immediately."
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
+      setTimeout(() => window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg)), 4500)
     }
     setAlertActive(isDanger)
   }, [allUsers, myProfile, alertActive])
-
-  // Isolated Audio function to bypass Chrome blocks
-  const triggerAudioAlert = () => {
-    setAlertActive(true)
-    const msg = "Ambulance approaching nearby, please clear the overtaking lane immediately."
-    const utterance = new SpeechSynthesisUtterance(msg)
-    window.speechSynthesis.speak(utterance)
-    setTimeout(() => {
-      window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
-    }, 4500)
-  }
 
   const findNearestHospital = async (lat, lng) => {
     try {
       const query = `[out:json];node(around:8000,${lat},${lng})["amenity"="hospital"];out 1;`;
       const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
       const data = await res.json();
-      if (data.elements && data.elements.length > 0) {
-        const hosp = data.elements[0];
-        return { name: hosp.tags?.name || "Nearest Emergency Hospital", coords: [hosp.lat, hosp.lon] };
-      }
-    } catch (err) {
-      console.error("Hospital API Failed", err);
-    }
-    return { name: "Emergency Medical Center (Simulated)", coords: [lat + 0.015, lng + 0.015] };
+      if (data.elements && data.elements.length > 0) return { name: data.elements[0].tags?.name || "Nearest Hospital", coords: [data.elements[0].lat, data.elements[0].lon] };
+    } catch (err) { }
+    return { name: "Emergency Medical Center", coords: [lat + 0.015, lng + 0.015] };
   }
 
   const toggleEmergency = async () => {
     const newState = !myProfile.is_emergency
     await supabase.from('profiles').update({ is_emergency: newState }).eq('id', session.user.id)
     setMyProfile({ ...myProfile, is_emergency: newState })
-    
     if (newState && myProfile.lat && myProfile.lng) {
       setIsRouting(true)
       const hospital = await findNearestHospital(myProfile.lat, myProfile.lng);
       setTargetHospital(hospital);
     } else {
-      setTargetHospital(null);
-      setHospitalRoute(null);
-      setIsRouting(false);
+      setTargetHospital(null); setHospitalRoute(null); setIsRouting(false);
     }
   }
+
+  const enforceProfile = async (lat, lng) => {
+    const updatedProfile = { ...myProfile, lat, lng };
+    setMyProfile(updatedProfile);
+    if (session?.user?.id) await supabase.from('profiles').update({ lat, lng }).eq('id', session.user.id);
+  }
+
+  const triggerOverride = () => enforceProfile((myProfile?.lat || 23.0625) + 0.002, (myProfile?.lng || 72.5314) + 0.002);
+  const forceRealGPS = () => navigator.geolocation.getCurrentPosition(pos => enforceProfile(pos.coords.latitude, pos.coords.longitude), err => alert(err.message), { enableHighAccuracy: true, timeout: 30000 });
+
+  // ==========================================
+  // FIXED FAMILY VIEWER: WEBRTC DUMMY STREAM HACK
+  // ==========================================
+  useEffect(() => {
+    if (myProfile?.role === 'family' && session?.user?.email) {
+      const fetchDriver = async () => {
+        const { data } = await supabase.from('profiles').select('*').eq('sos_email', session.user.email).maybeSingle();
+        if (data) setLinkedDriver(data);
+      }
+      fetchDriver();
+      const interval = setInterval(fetchDriver, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [myProfile?.role, session?.user?.email])
 
   useEffect(() => {
-    if (myProfile?.role === 'emergency' && myProfile?.is_emergency && myProfile?.lat && myProfile?.lng && targetHospital) {
-      setIsRouting(true)
-      fetch(`https://router.project-osrm.org/route/v1/driving/${myProfile.lng},${myProfile.lat};${targetHospital.coords[1]},${targetHospital.coords[0]}?overview=full&geometries=geojson`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.routes && data.routes[0]) {
-            const realRoadCoords = data.routes[0].geometry.coordinates.map(coord => [coord[1], coord[0]])
-            setHospitalRoute(realRoadCoords)
-          } else {
-            setHospitalRoute([[myProfile.lat, myProfile.lng], targetHospital.coords])
-          }
-          setIsRouting(false)
-        })
-        .catch(err => {
-          setHospitalRoute([[myProfile.lat, myProfile.lng], targetHospital.coords])
-          setIsRouting(false)
-        })
-    }
-  }, [myProfile?.lat, myProfile?.lng, myProfile?.is_emergency, targetHospital])
+    if (myProfile?.role !== 'family' || !linkedDriver?.id) return;
 
-  const enforceProfile = async (latitude, longitude, overrideRole = null) => {
-    const activeRole = overrideRole || myProfile?.role || 'emergency'; 
-    const plate = myProfile?.plate_number && myProfile.plate_number !== 'UNKNOWN' 
-      ? myProfile.plate_number 
-      : (activeRole === 'emergency' ? 'AMB-911' : 'GJ-01-XX');
-    
-    const updatedProfile = { ...myProfile, role: activeRole, plate_number: plate, lat: latitude, lng: longitude };
-    setMyProfile(updatedProfile);
-    
-    if (session?.user?.id) {
-      await supabase.from('profiles').upsert({ id: session.user.id, role: activeRole, plate_number: plate, lat: latitude, lng: longitude });
-    }
-  }
+    const peer = new Peer({
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      }
+    });
 
-  const triggerOverride = () => {
-    const activeRole = myProfile?.role || 'emergency'; 
-    const baseLat = myProfile?.lat || 23.2156; 
-    const baseLng = myProfile?.lng || 72.6369; 
-    const mockLat = activeRole === 'emergency' ? baseLat + 0.002 : baseLat; 
-    const mockLng = activeRole === 'emergency' ? baseLng + 0.002 : baseLng;
-    enforceProfile(mockLat, mockLng);
-  }
+    peer.on('open', () => {
+      // THE HACK: Create an invisible canvas to pass an "Empty" stream to the driver
+      const canvas = document.createElement('canvas');
+      const dummyStream = canvas.captureStream(1);
 
-  const forceRealGPS = () => {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => enforceProfile(pos.coords.latitude, pos.coords.longitude),
-      (err) => alert("GPS Error: " + err.message),
-      { enableHighAccuracy: true, timeout: 30000 }
-    )
-  }
+      // Call the driver securely
+      const call = peer.call(`motionx-driver-${linkedDriver.id}`, dummyStream);
+      
+      call.on('stream', (remoteStream) => {
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStream;
+          remoteVideoRef.current.play().catch(e => console.log("Auto-play blocked:", e));
+        }
+      });
+    });
 
-  if (!session) return <Auth onLogin={(user) => { setSession({ user }); fetchProfile(user.id); }} />
+    return () => peer.destroy();
+  }, [myProfile?.role, linkedDriver?.id]);
+
+  if (!session) return <Auth onLogin={(user, localProfile) => { 
+    setSession({ user }); 
+    if (localProfile) setMyProfile(localProfile);
+    fetchProfile(user.id); 
+  }} />
   
-  if (!myProfile?.lat) return (
-    <div className="flex flex-col h-screen items-center justify-center bg-gray-100 text-gray-800 font-sans gap-4 p-4 text-center">
+  if (!myProfile) return (
+    <div className="flex flex-col h-screen items-center justify-center bg-gray-900 text-white font-sans gap-4 p-4 text-center">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-500 mb-2"></div>
+      <div className="text-xl font-bold tracking-widest uppercase">Loading Secure Profile...</div>
+      <button onClick={handleLogout} className="mt-4 px-6 py-3 bg-red-600 rounded font-bold shadow-lg hover:bg-red-700 cursor-pointer">FORCE LOGOUT / RETRY</button>
+    </div>
+  )
+  
+  if (!myProfile.lat && myProfile.role !== 'family') return (
+    <div className="flex flex-col h-screen items-center justify-center bg-gray-100 text-gray-800 gap-4 p-4 text-center">
       <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-600 mb-2"></div>
       <div className="text-xl font-bold">Acquiring Secure V2X Network...</div>
-      <button onClick={forceRealGPS} className="w-full max-w-sm mt-4 px-6 py-4 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-xl">
-        ALLOW LOCATION (REAL GPS)
-      </button>
-      <p className="text-gray-500 font-bold text-sm my-2">OR</p>
-      <button onClick={triggerOverride} className="w-full max-w-sm px-6 py-4 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-xl">
-        FORCE OVERRIDE (DEMO MAP)
-      </button>
+      <button onClick={forceRealGPS} className="w-full max-w-sm mt-4 px-6 py-4 bg-blue-600 text-white rounded-lg font-bold shadow-xl cursor-pointer">ALLOW LOCATION (REAL GPS)</button>
+      <p className="text-gray-500 font-bold">OR</p>
+      <button onClick={triggerOverride} className="w-full max-w-sm px-6 py-4 bg-red-600 text-white rounded-lg font-bold shadow-xl cursor-pointer">FORCE OVERRIDE (DEMO MAP)</button>
+      <button onClick={handleLogout} className="mt-6 text-sm font-bold text-red-600 underline cursor-pointer">Log Out</button>
     </div>
   )
 
+  if (myProfile.role === 'family') {
+    const isDanger = linkedDriver?.ai_status === 'DROWSY' || linkedDriver?.ai_status === 'PHONE DETECTED';
+    return (
+      <div className="h-screen w-screen bg-gray-900 text-white flex flex-col font-sans">
+        <div className={`p-6 text-center shadow-2xl z-[999] transition-colors duration-500 ${isDanger ? 'bg-red-600 animate-pulse' : 'bg-gray-800'}`}>
+          <button onClick={handleLogout} className="absolute top-6 right-6 bg-red-600 px-4 py-2 rounded font-bold text-sm shadow hover:bg-red-700 cursor-pointer">LOGOUT</button>
+          <h1 className="text-3xl font-black uppercase tracking-widest">Family SOS Tracker</h1>
+          <p className="text-xl mt-2 font-bold uppercase text-gray-300">Tracking: {linkedDriver ? (linkedDriver.plate_number || "GJ-01-XX") : "SEARCHING FOR VEHICLE..."}</p>
+          {linkedDriver && (
+            <div className="mt-4 inline-block bg-white px-8 py-3 rounded-full shadow-lg">
+              <span className="font-black text-gray-800 text-lg">AI STATUS: </span>
+              <span className={`font-black text-xl ml-2 ${isDanger ? 'text-red-600 font-black' : 'text-green-500'}`}>{linkedDriver.ai_status || "SAFE"}</span>
+            </div>
+          )}
+        </div>
+        <div className="flex-1 flex flex-col md:flex-row">
+          <div className="w-full md:w-1/3 p-6 flex flex-col bg-gray-900 border-r-4 border-gray-800">
+            <h2 className="font-black mb-4 text-xl tracking-widest text-blue-400">LIVE DRIVER CAM</h2>
+            <div className="flex-1 bg-black rounded-2xl overflow-hidden border-4 border-gray-700 shadow-2xl relative flex items-center justify-center">
+              <video ref={remoteVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              {!remoteVideoRef.current?.srcObject && <div className="absolute text-center text-gray-500 font-bold tracking-widest p-4">WAITING FOR DRIVER VIDEO...</div>}
+            </div>
+          </div>
+          <div className="w-full md:w-2/3 relative">
+            <MapContainer center={[linkedDriver?.lat || 23.0625, linkedDriver?.lng || 72.5314]} zoom={15} style={{ height: '100%', width: '100%', zIndex: 1 }}>
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              {linkedDriver?.lat && linkedDriver?.lng && (
+                <Marker position={[linkedDriver.lat, linkedDriver.lng]} icon={familyIcon}>
+                  <Popup><strong>{linkedDriver.plate_number || "GJ-01-XX"} (TRACKED)</strong></Popup>
+                </Marker>
+              )}
+            </MapContainer>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="relative h-screen w-screen overflow-hidden">
-      
-      {/* PRIVATE DASHBOARD */}
-      {myProfile.role === 'private' && (
+    <div className="relative h-screen w-screen overflow-hidden font-sans">
+      {(myProfile.role === 'private' || myProfile.role === 'fleet') && (
         <>
-          <div className="absolute top-6 left-6 z-[999] bg-white p-4 rounded-xl shadow-xl border-l-4 border-blue-600">
-            <h2 className="font-black text-gray-900 text-lg">PRIVATE DASHBOARD</h2>
+          <div className="absolute top-6 left-6 z-[990] bg-white p-4 rounded-xl shadow-xl border-l-4 border-blue-600">
+            <h2 className="font-black text-gray-900 text-lg uppercase">{myProfile.role} DASHBOARD</h2>
             <p className="text-gray-600 font-mono text-sm mt-1 uppercase">Plate: {myProfile.plate_number}</p>
-            
-            {/* PITCH LIFESAVER BUTTON: If DB sync fails, click this to manually trigger demo alert */}
-            <button 
-              onClick={triggerAudioAlert} 
-              className="mt-3 text-xs font-bold text-blue-600 underline cursor-pointer hover:text-blue-800"
-            >
-              [Test V2X Voice Alert]
-            </button>
+            <button onClick={handleLogout} className="mt-3 text-xs font-black text-red-600 underline cursor-pointer hover:text-red-800">[LOGOUT / SWITCH USER]</button>
           </div>
 
-          {/*AI DASHCAM WIDGET ENGINES - FLOATING BOTTOM RIGHT */}
-          <DashcamAI />
+          <button onClick={() => setShowSosModal(true)} className="absolute top-6 right-6 z-[990] bg-red-600 text-white px-6 py-3 rounded-xl font-black shadow-xl hover:bg-red-700 uppercase tracking-widest border-2 border-red-400 animate-pulse cursor-pointer">
+            SOS FAMILY SETUP
+          </button>
+
+          {showSosModal && (
+            <div className="absolute top-0 left-0 w-full h-full bg-black/80 z-[9999] flex items-center justify-center">
+              <div className="bg-gray-900 p-8 rounded-3xl border-2 border-blue-500 shadow-[0_0_50px_rgba(59,130,246,0.5)] text-center w-[90%] max-w-md">
+                <h2 className="text-white font-black text-2xl mb-2">LINK SOS FAMILY</h2>
+                <p className="text-gray-400 text-sm mb-6 font-bold">Enter the email address your family member will use to log in to the tracker.</p>
+                <input type="email" value={sosEmailInput} onChange={(e) => setSosEmailInput(e.target.value)} className="w-full p-4 rounded-xl mb-6 text-black font-black outline-none text-center text-lg" placeholder="family@test.com" />
+                <div className="flex gap-4">
+                  <button onClick={() => setShowSosModal(false)} className="flex-1 bg-gray-600 text-white font-black py-4 rounded-xl hover:bg-gray-500 cursor-pointer">CANCEL</button>
+                  <button onClick={async () => {
+                      await supabase.from('profiles').update({ sos_email: sosEmailInput }).eq('id', session.user.id);
+                      setMyProfile({ ...myProfile, sos_email: sosEmailInput });
+                      setShowSosModal(false);
+                      alert("SOS Family linked successfully!");
+                    }} className="flex-1 bg-green-500 text-white font-black py-4 rounded-xl shadow-[0_0_20px_rgba(34,197,94,0.5)] hover:bg-green-400 cursor-pointer">SAVE LINK</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DashcamAI userId={session.user.id} />
           
           {alertActive && (
             <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[999] bg-red-600 text-white p-6 rounded-xl shadow-2xl animate-pulse text-2xl font-black border-4 border-yellow-400 text-center w-[90%] max-w-lg">
@@ -243,46 +267,29 @@ export default function App() {
         </>
       )}
 
-      {/* EMERGENCY DASHBOARD */}
       {myProfile.role === 'emergency' && (
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[999] bg-white p-6 rounded-2xl shadow-2xl w-[90%] max-w-lg text-center border-t-4 border-red-600">
           <h2 className="font-black text-gray-900 text-2xl mb-1 uppercase">UNIT: {myProfile.plate_number}</h2>
+          <button onClick={handleLogout} className="absolute top-6 right-6 text-xs font-black text-red-600 underline cursor-pointer hover:text-red-800">[LOGOUT]</button>
           <p className={`font-bold mb-4 ${myProfile.is_emergency ? 'text-red-600 animate-pulse' : 'text-gray-500'}`}>
             {isRouting ? 'SCANNING FOR NEAREST HOSPITAL...' : (myProfile.is_emergency && targetHospital ? `ROUTING TO: ${targetHospital.name.toUpperCase()}` : 'STANDBY MODE')}
           </p>
-          <button 
-            onClick={toggleEmergency}
-            disabled={isRouting}
-            className={`w-full py-4 text-xl font-extrabold rounded-xl transition-all shadow-lg text-white ${myProfile.is_emergency ? 'bg-gray-800 hover:bg-gray-900' : 'bg-red-600 hover:bg-red-700'}`}
-          >
+          <button onClick={toggleEmergency} disabled={isRouting} className={`w-full py-4 text-xl font-extrabold rounded-xl shadow-lg text-white cursor-pointer ${myProfile.is_emergency ? 'bg-gray-800 hover:bg-gray-900' : 'bg-red-600 hover:bg-red-700'}`}>
             {myProfile.is_emergency ? 'DEACTIVATE EMERGENCY' : 'ACTIVATE EMERGENCY ROUTE'}
           </button>
         </div>
       )}
 
-      {/* LEAFLET MAP */}
       <MapContainer center={[myProfile.lat, myProfile.lng]} zoom={14} style={{ height: '100%', width: '100%', zIndex: 1 }}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        
-        {hospitalRoute && myProfile.role === 'emergency' && (
-          <Polyline positions={hospitalRoute} color="#dc2626" weight={8} opacity={0.8} />
-        )}
-
-        {myProfile.is_emergency && targetHospital && (
-          <Marker position={targetHospital.coords}>
-            <Popup><strong>{targetHospital.name}</strong></Popup>
-          </Marker>
-        )}
-
-        {/* YOUR OWN MARKER */}
-        <Marker position={[myProfile.lat, myProfile.lng]} icon={myProfile.role === 'emergency' ? emergencyIcon : privateIcon}>
+        {hospitalRoute && myProfile.role === 'emergency' && <Polyline positions={hospitalRoute} color="#dc2626" weight={8} opacity={0.8} />}
+        {myProfile.is_emergency && targetHospital && <Marker position={targetHospital.coords}><Popup><strong>{targetHospital.name}</strong></Popup></Marker>}
+        <Marker position={[myProfile.lat, myProfile.lng]} icon={myProfile.role === 'emergency' ? emergencyIcon : (myProfile.role === 'fleet' ? fleetIcon : privateIcon)}>
           <Popup><strong>{myProfile.plate_number} (YOU)</strong></Popup>
         </Marker>
-        
-        {/* OTHER VEHICLES MARKERS */}
         {allUsers.filter(u => u.id !== session.user.id).map(user => (
           user.lat && user.lng && (
-            <Marker key={user.id} position={[user.lat, user.lng]} icon={user.role === 'emergency' ? emergencyIcon : privateIcon}>
+            <Marker key={user.id} position={[user.lat, user.lng]} icon={user.role === 'emergency' ? emergencyIcon : (user.role === 'fleet' ? fleetIcon : privateIcon)}>
               <Popup>
                 <div className="text-center">
                   <strong className="text-lg uppercase">{user.plate_number}</strong><br/>
