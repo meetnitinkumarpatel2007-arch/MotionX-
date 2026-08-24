@@ -14,7 +14,7 @@ export default function DashcamAI({ userId }) {
   const [isDanger, setIsDanger] = useState(false);
   const [alertMessage, setAlertMessage] = useState("MONITORING DRIVER");
   const [eyesOpen, setEyesOpen] = useState(true);
-  const [isLocalMode, setIsLocalMode] = useState(false); // The Hackathon Turbo Toggle!
+  const [isLocalMode, setIsLocalMode] = useState(false);
 
   const phoneStartRef = useRef(null);
   const eyesClosedStartRef = useRef(null);
@@ -56,7 +56,6 @@ export default function DashcamAI({ userId }) {
   }, [userId]);
 
   useEffect(() => {
-    // Dynamic URL switching based on the toggle!
     const wsUrl = isLocalMode 
       ? "ws://127.0.0.1:8000/ws/detect" 
       : "wss://motionx-python-ai.onrender.com/ws/detect";
@@ -75,20 +74,20 @@ export default function DashcamAI({ userId }) {
 
     const interval = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN && !isProcessingRef.current && webcamRef.current) {
-        // MAX FPS BOOST: Compressed 320x240 image for lightning-fast network transfer!
-        const imageSrc = webcamRef.current.getScreenshot({ width: 320, height: 240 });
+        // REVERTED TO HIGH QUALITY 640x480 FOR FLAWLESS PHONE DETECTION
+        const imageSrc = webcamRef.current.getScreenshot({ width: 640, height: 480 });
         if (imageSrc) {
           isProcessingRef.current = true; 
           wsRef.current.send(imageSrc);
         }
       }
-    }, 40); // MAX FPS BOOST: 40ms interval loop for near 25 FPS!
+    }, 100); // Balanced 100ms interval for speed + accuracy
 
     return () => {
       clearInterval(interval);
       wsRef.current?.close();
     };
-  }, [isLocalMode]); // Re-runs WebSocket connection if you click the toggle!
+  }, [isLocalMode]);
 
   const processAiData = (data) => {
     if (!webcamRef.current?.video) return;
@@ -100,9 +99,9 @@ export default function DashcamAI({ userId }) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // MAX FPS BOOST: Correctly scales the 320px coordinates back up to your HD Canvas
-    const scaleX = canvas.width / 320;
-    const scaleY = canvas.height / 240;
+    // REVERTED SCALING TO MATCH 640x480 INPUT
+    const scaleX = canvas.width / 640;
+    const scaleY = canvas.height / 480;
 
     let phoneDetected = false;
 
@@ -114,7 +113,6 @@ export default function DashcamAI({ userId }) {
       let color = label === 'cell phone' ? '#dc2626' : (label === 'bottle' ? '#3b82f6' : '#22c55e'); 
       ctx.strokeStyle = color; 
       ctx.lineWidth = 4; 
-      // Apply scaling so boxes draw in the correct spot!
       ctx.strokeRect(x * scaleX, y * scaleY, w * scaleX, h * scaleY);
       ctx.fillStyle = color; 
       ctx.font = 'bold 20px Arial';
@@ -159,7 +157,6 @@ export default function DashcamAI({ userId }) {
         <h3 className="font-black text-white text-lg tracking-widest uppercase">MotionX</h3>
         
         <div className="flex items-center gap-3">
-          {/* THE HACKATHON TOGGLE BUTTON */}
           <button 
             onClick={() => setIsLocalMode(!isLocalMode)}
             className="text-[10px] font-black uppercase bg-gray-800 px-2 py-1 rounded border border-gray-600 hover:bg-gray-700 text-gray-300 transition-colors cursor-pointer"
