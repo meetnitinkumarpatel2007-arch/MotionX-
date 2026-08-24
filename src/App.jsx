@@ -22,7 +22,7 @@ export default function App() {
   const [session, setSession] = useState(null)
   const [myProfile, setMyProfile] = useState(null)
   const [allUsers, setAllUsers] = useState([])
-  const [alertActive, setAlertActive] = useState(false)
+  const [v2xWarningLevel, setV2xWarningLevel] = useState(0) // 0: Safe, 1: 1000m, 2: 50m
   
   const [targetHospital, setTargetHospital] = useState(null)
   const [hospitalRoute, setHospitalRoute] = useState(null)
@@ -64,24 +64,29 @@ export default function App() {
     return () => supabase.removeChannel(sub)
   }, [session, myProfile?.lat])
 
+  // DUAL-STAGE V2X PROXIMITY ALERT
   useEffect(() => {
     if (myProfile?.role !== 'private' && myProfile?.role !== 'fleet') return
     const activeAmbulances = allUsers.filter(u => u.role === 'emergency' && u.is_emergency)
-    let isDanger = false
+    
+    let currentWarningLevel = 0; // Default Safe
 
     activeAmbulances.forEach(amb => {
       if (amb.lat && amb.lng && myProfile.lat && myProfile.lng) {
-        if (getDistance(amb.lat, amb.lng, myProfile.lat, myProfile.lng) <= 1000) isDanger = true;
+        const dist = getDistance(amb.lat, amb.lng, myProfile.lat, myProfile.lng);
+        if (dist <= 50) currentWarningLevel = 2; // Critical Imminent (50m)
+        else if (dist <= 1000 && currentWarningLevel < 2) currentWarningLevel = 1; // Approaching (1000m)
       }
     })
 
-    if (isDanger && !alertActive) {
-      const msg = "Ambulance approaching nearby, please clear the overtaking lane immediately."
+    if (currentWarningLevel > 0 && v2xWarningLevel === 0) {
+      const msg = currentWarningLevel === 2 
+        ? "Ambulance Imminent. Pull over immediately." 
+        : "Please clear overtaking lane, ambulance is arriving.";
       window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
-      setTimeout(() => window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg)), 4500)
     }
-    setAlertActive(isDanger)
-  }, [allUsers, myProfile, alertActive])
+    setV2xWarningLevel(currentWarningLevel)
+  }, [allUsers, myProfile, v2xWarningLevel])
 
   const findNearestHospital = async (lat, lng) => {
     try {
@@ -115,9 +120,11 @@ export default function App() {
   const triggerOverride = () => enforceProfile((myProfile?.lat || 23.0625) + 0.002, (myProfile?.lng || 72.5314) + 0.002);
   const forceRealGPS = () => navigator.geolocation.getCurrentPosition(pos => enforceProfile(pos.coords.latitude, pos.coords.longitude), err => alert(err.message), { enableHighAccuracy: true, timeout: 30000 });
 
-  // ==========================================
-  // FIXED FAMILY VIEWER: WEBRTC DUMMY STREAM HACK
-  // ==========================================
+  // MANUAL VOICE TEST FUNCTION
+  const testVoiceAlert = () => {
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance("Please clear overtaking lane, ambulance is arriving."));
+  };
+
   useEffect(() => {
     if (myProfile?.role === 'family' && session?.user?.email) {
       const fetchDriver = async () => {
@@ -132,32 +139,18 @@ export default function App() {
 
   useEffect(() => {
     if (myProfile?.role !== 'family' || !linkedDriver?.id) return;
-
-    const peer = new Peer({
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-      }
-    });
-
+    const peer = new Peer({ config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }});
     peer.on('open', () => {
-      // THE HACK: Create an invisible canvas to pass an "Empty" stream to the driver
       const canvas = document.createElement('canvas');
       const dummyStream = canvas.captureStream(1);
-
-      // Call the driver securely
       const call = peer.call(`motionx-driver-${linkedDriver.id}`, dummyStream);
-      
       call.on('stream', (remoteStream) => {
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = remoteStream;
-          remoteVideoRef.current.play().catch(e => console.log("Auto-play blocked:", e));
+          remoteVideoRef.current.play().catch(e => console.log(e));
         }
       });
     });
-
     return () => peer.destroy();
   }, [myProfile?.role, linkedDriver?.id]);
 
@@ -193,7 +186,7 @@ export default function App() {
         <div className={`p-6 text-center shadow-2xl z-[999] transition-colors duration-500 ${isDanger ? 'bg-red-600 animate-pulse' : 'bg-gray-800'}`}>
           <button onClick={handleLogout} className="absolute top-6 right-6 bg-red-600 px-4 py-2 rounded font-bold text-sm shadow hover:bg-red-700 cursor-pointer">LOGOUT</button>
           <h1 className="text-3xl font-black uppercase tracking-widest">Family SOS Tracker</h1>
-          <p className="text-xl mt-2 font-bold uppercase text-gray-300">Tracking: {linkedDriver ? (linkedDriver.plate_number || "GJ-01-XX") : "SEARCHING FOR VEHICLE..."}</p>
+          <p className="text-xl mt-2 font-bold uppercase text-gray-300">Tracking: {linkedDriver ? (linkedDriver.plate_number || "UNKNOWN") : "SEARCHING FOR VEHICLE..."}</p>
           {linkedDriver && (
             <div className="mt-4 inline-block bg-white px-8 py-3 rounded-full shadow-lg">
               <span className="font-black text-gray-800 text-lg">AI STATUS: </span>
@@ -214,7 +207,7 @@ export default function App() {
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               {linkedDriver?.lat && linkedDriver?.lng && (
                 <Marker position={[linkedDriver.lat, linkedDriver.lng]} icon={familyIcon}>
-                  <Popup><strong>{linkedDriver.plate_number || "GJ-01-XX"} (TRACKED)</strong></Popup>
+                  <Popup><strong>{linkedDriver.plate_number || "UNKNOWN"} (TRACKED)</strong></Popup>
                 </Marker>
               )}
             </MapContainer>
@@ -231,7 +224,16 @@ export default function App() {
           <div className="absolute top-6 left-6 z-[990] bg-white p-4 rounded-xl shadow-xl border-l-4 border-blue-600">
             <h2 className="font-black text-gray-900 text-lg uppercase">{myProfile.role} DASHBOARD</h2>
             <p className="text-gray-600 font-mono text-sm mt-1 uppercase">Plate: {myProfile.plate_number}</p>
-            <button onClick={handleLogout} className="mt-3 text-xs font-black text-red-600 underline cursor-pointer hover:text-red-800">[LOGOUT / SWITCH USER]</button>
+            
+            {/* RESTORED TEST V2X VOICE ALERT BUTTON */}
+            <div className="mt-3 border-t pt-2">
+              <button onClick={testVoiceAlert} className="text-xs font-black text-blue-600 underline cursor-pointer hover:text-blue-800 block mb-1">
+                [Test V2X Voice Alert]
+              </button>
+              <button onClick={handleLogout} className="text-xs font-black text-red-600 underline cursor-pointer hover:text-red-800 block">
+                [LOGOUT / SWITCH USER]
+              </button>
+            </div>
           </div>
 
           <button onClick={() => setShowSosModal(true)} className="absolute top-6 right-6 z-[990] bg-red-600 text-white px-6 py-3 rounded-xl font-black shadow-xl hover:bg-red-700 uppercase tracking-widest border-2 border-red-400 animate-pulse cursor-pointer">
@@ -259,9 +261,15 @@ export default function App() {
 
           <DashcamAI userId={session.user.id} />
           
-          {alertActive && (
-            <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[999] bg-red-600 text-white p-6 rounded-xl shadow-2xl animate-pulse text-2xl font-black border-4 border-yellow-400 text-center w-[90%] max-w-lg">
-              🚨 AMBULANCE APPROACHING 🚨 <br/> Clear Overtaking Lane!
+          {/* DUAL STAGE V2X ALERT UI */}
+          {v2xWarningLevel === 1 && (
+            <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[999] bg-yellow-500 text-black p-6 rounded-xl shadow-2xl animate-pulse text-xl font-black border-4 border-yellow-700 text-center w-[90%] max-w-lg">
+              ⚠️ AMBULANCE APPROACHING (1KM) ⚠️ <br/> Clear Overtaking Lane!
+            </div>
+          )}
+          {v2xWarningLevel === 2 && (
+            <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[999] bg-red-600 text-white p-6 rounded-xl shadow-2xl animate-pulse text-2xl font-black border-4 border-red-900 text-center w-[90%] max-w-lg">
+              🚨 AMBULANCE IMMINENT (50m) 🚨 <br/> Pull Over Immediately!
             </div>
           )}
         </>
