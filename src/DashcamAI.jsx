@@ -14,6 +14,7 @@ export default function DashcamAI({ userId }) {
   const [isDanger, setIsDanger] = useState(false);
   const [alertMessage, setAlertMessage] = useState("MONITORING DRIVER");
   const [eyesOpen, setEyesOpen] = useState(true);
+  const [isLocalMode, setIsLocalMode] = useState(false); // The Hackathon Turbo Toggle!
 
   const phoneStartRef = useRef(null);
   const eyesClosedStartRef = useRef(null);
@@ -55,10 +56,14 @@ export default function DashcamAI({ userId }) {
   }, [userId]);
 
   useEffect(() => {
-    // IMPORTANT: Make sure this is your live Render URL!
-    wsRef.current = new WebSocket("wss://motionx-python-ai.onrender.com/ws/detect");
+    // Dynamic URL switching based on the toggle!
+    const wsUrl = isLocalMode 
+      ? "ws://127.0.0.1:8000/ws/detect" 
+      : "wss://motionx-python-ai.onrender.com/ws/detect";
 
-    wsRef.current.onopen = () => setAiStatus("● PYTHON AI LINKED");
+    wsRef.current = new WebSocket(wsUrl);
+
+    wsRef.current.onopen = () => setAiStatus(isLocalMode ? "● LOCAL AI LINKED" : "● CLOUD AI LINKED");
     
     wsRef.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -70,19 +75,20 @@ export default function DashcamAI({ userId }) {
 
     const interval = setInterval(() => {
       if (wsRef.current?.readyState === WebSocket.OPEN && !isProcessingRef.current && webcamRef.current) {
-        const imageSrc = webcamRef.current.getScreenshot({ width: 640, height: 480 });
+        // MAX FPS BOOST: Compressed 320x240 image for lightning-fast network transfer!
+        const imageSrc = webcamRef.current.getScreenshot({ width: 320, height: 240 });
         if (imageSrc) {
           isProcessingRef.current = true; 
           wsRef.current.send(imageSrc);
         }
       }
-    }, 150);
+    }, 40); // MAX FPS BOOST: 40ms interval loop for near 25 FPS!
 
     return () => {
       clearInterval(interval);
       wsRef.current?.close();
     };
-  }, []);
+  }, [isLocalMode]); // Re-runs WebSocket connection if you click the toggle!
 
   const processAiData = (data) => {
     if (!webcamRef.current?.video) return;
@@ -94,9 +100,9 @@ export default function DashcamAI({ userId }) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // FIXED RESOLUTION SCALING MULTIPLIERS
-    const scaleX = canvas.width / 640;
-    const scaleY = canvas.height / 480;
+    // MAX FPS BOOST: Correctly scales the 320px coordinates back up to your HD Canvas
+    const scaleX = canvas.width / 320;
+    const scaleY = canvas.height / 240;
 
     let phoneDetected = false;
 
@@ -151,13 +157,26 @@ export default function DashcamAI({ userId }) {
     <div className={`absolute bottom-6 right-6 z-[999] bg-gray-900/95 backdrop-blur border-2 p-5 rounded-3xl w-[640px] transition-all duration-300 ${isDanger ? 'border-red-600 shadow-[0_0_60px_rgba(220,38,38,0.7)] scale-[1.02]' : 'border-blue-500/50 shadow-2xl'}`}>
       <div className="flex justify-between items-center mb-4">
         <h3 className="font-black text-white text-lg tracking-widest uppercase">MotionX</h3>
-        <span className="text-gray-400 font-mono text-sm font-bold tracking-widest">
-          PYTHON LOGIC: 
-          <span className={eyesOpen ? "text-green-500 ml-2" : "text-red-500 ml-2 font-black animate-pulse"}>
-            {eyesOpen ? "(EYES OPEN)" : "(EYES CLOSED)"}
+        
+        <div className="flex items-center gap-3">
+          {/* THE HACKATHON TOGGLE BUTTON */}
+          <button 
+            onClick={() => setIsLocalMode(!isLocalMode)}
+            className="text-[10px] font-black uppercase bg-gray-800 px-2 py-1 rounded border border-gray-600 hover:bg-gray-700 text-gray-300 transition-colors cursor-pointer"
+            title="Toggle Local/Cloud AI for 0ms Latency Demo"
+          >
+            {isLocalMode ? '🚀 LOCAL AI' : '☁️ CLOUD AI'}
+          </button>
+
+          <span className="text-gray-400 font-mono text-sm font-bold tracking-widest">
+            LOGIC: 
+            <span className={eyesOpen ? "text-green-500 ml-2" : "text-red-500 ml-2 font-black animate-pulse"}>
+              {eyesOpen ? "(OPEN)" : "(CLOSED)"}
+            </span>
           </span>
-        </span>
-        <span className={`text-sm font-black ${aiStatus.includes("LINKED") ? 'text-green-500 animate-pulse' : 'text-yellow-500'}`}>
+        </div>
+
+        <span className={`text-sm font-black ${aiStatus.includes("LINKED") ? 'text-green-500 animate-pulse' : 'text-red-500'}`}>
           {aiStatus}
         </span>
       </div>
