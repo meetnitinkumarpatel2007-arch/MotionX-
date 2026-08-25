@@ -129,7 +129,7 @@ export default function DashcamAI({ userId }) {
             const rightEAR = rightV / (2.0 * rightH);
 
             const EAR = (leftEAR + rightEAR) / 2.0;
-            if (EAR < 0.25) isEyesOpen = false; // Threshold for closed eyes
+            if (EAR < 0.32) isEyesOpen = false; // Threshold for closed eyes
           }
         } catch (err) { }
 
