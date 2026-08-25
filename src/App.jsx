@@ -182,27 +182,36 @@ export default function App() {
   if (myProfile.role === 'family') {
     const isDanger = linkedDriver?.ai_status === 'DROWSY' || linkedDriver?.ai_status === 'PHONE DETECTED';
     return (
-      <div className="h-screen w-screen bg-gray-900 text-white flex flex-col font-sans">
-        <div className={`p-6 text-center shadow-2xl z-[999] transition-colors duration-500 ${isDanger ? 'bg-red-600 animate-pulse' : 'bg-gray-800'}`}>
-          <button onClick={handleLogout} className="absolute top-6 right-6 bg-red-600 px-4 py-2 rounded font-bold text-sm shadow hover:bg-red-700 cursor-pointer">LOGOUT</button>
-          <h1 className="text-3xl font-black uppercase tracking-widest">Family SOS Tracker</h1>
-          <p className="text-xl mt-2 font-bold uppercase text-gray-300">Tracking: {linkedDriver ? (linkedDriver.plate_number || "UNKNOWN") : "SEARCHING FOR VEHICLE..."}</p>
+      <div className="h-screen w-screen bg-gray-900 text-white flex flex-col font-sans overflow-hidden">
+        
+        {/* HEADER SECTION (Responsive Padding) */}
+        <div className={`p-3 md:p-6 text-center shadow-2xl z-[999] transition-colors duration-500 flex-shrink-0 ${isDanger ? 'bg-red-600 animate-pulse' : 'bg-gray-800'}`}>
+          <button onClick={handleLogout} className="absolute top-4 right-4 bg-red-600 px-3 py-1 md:px-4 md:py-2 rounded font-bold text-xs md:text-sm shadow hover:bg-red-700 cursor-pointer">LOGOUT</button>
+          <h1 className="text-xl md:text-3xl font-black uppercase tracking-widest">Family SOS Tracker</h1>
+          <p className="text-sm md:text-xl mt-1 md:mt-2 font-bold uppercase text-gray-300">Tracking: {linkedDriver ? (linkedDriver.plate_number || "UNKNOWN") : "SEARCHING FOR VEHICLE..."}</p>
           {linkedDriver && (
-            <div className="mt-4 inline-block bg-white px-8 py-3 rounded-full shadow-lg">
-              <span className="font-black text-gray-800 text-lg">AI STATUS: </span>
-              <span className={`font-black text-xl ml-2 ${isDanger ? 'text-red-600 font-black' : 'text-green-500'}`}>{linkedDriver.ai_status || "SAFE"}</span>
+            <div className="mt-2 md:mt-4 inline-block bg-white px-4 md:px-8 py-1 md:py-3 rounded-full shadow-lg">
+              <span className="font-black text-gray-800 text-sm md:text-lg">AI STATUS: </span>
+              <span className={`font-black text-sm md:text-xl ml-2 ${isDanger ? 'text-red-600 font-black' : 'text-green-500'}`}>{linkedDriver.ai_status || "SAFE"}</span>
             </div>
           )}
         </div>
-        <div className="flex-1 flex flex-col md:flex-row">
-          <div className="w-full md:w-1/3 p-6 flex flex-col bg-gray-900 border-r-4 border-gray-800">
-            <h2 className="font-black mb-4 text-xl tracking-widest text-blue-400">LIVE DRIVER CAM</h2>
-            <div className="flex-1 bg-black rounded-2xl overflow-hidden border-4 border-gray-700 shadow-2xl relative flex items-center justify-center">
+
+        {/* CONTENT AREA (Stacks on mobile, Side-by-side on desktop) */}
+        <div className="flex-1 flex flex-col md:flex-row h-full overflow-hidden">
+          
+          {/* LIVE VIDEO SECTION */}
+          <div className="w-full md:w-1/3 p-4 flex flex-col bg-gray-900 border-b-4 md:border-b-0 md:border-r-4 border-gray-800 z-10">
+            <h2 className="font-black mb-2 text-sm md:text-xl tracking-widest text-blue-400 text-center md:text-left">LIVE DRIVER CAM</h2>
+            {/* Force 16:9 Aspect Ratio on Mobile, Flex on Desktop */}
+            <div className="w-full aspect-video md:aspect-auto md:flex-1 bg-black rounded-xl overflow-hidden border-2 md:border-4 border-gray-700 shadow-2xl relative flex items-center justify-center">
               <video ref={remoteVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-              {!remoteVideoRef.current?.srcObject && <div className="absolute text-center text-gray-500 font-bold tracking-widest p-4">WAITING FOR DRIVER VIDEO...</div>}
+              {!remoteVideoRef.current?.srcObject && <div className="absolute text-center text-gray-500 font-bold tracking-widest p-4 text-xs md:text-base">WAITING FOR DRIVER VIDEO...</div>}
             </div>
           </div>
-          <div className="w-full md:w-2/3 relative">
+
+          {/* MAP SECTION */}
+          <div className="flex-1 w-full relative z-0">
             <MapContainer center={[linkedDriver?.lat || 23.0625, linkedDriver?.lng || 72.5314]} zoom={15} style={{ height: '100%', width: '100%', zIndex: 1 }}>
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
               {linkedDriver?.lat && linkedDriver?.lng && (
@@ -212,10 +221,13 @@ export default function App() {
               )}
             </MapContainer>
           </div>
+
         </div>
       </div>
     )
   }
+
+  
 
   return (
     <div className="relative h-screen w-screen overflow-hidden font-sans">
