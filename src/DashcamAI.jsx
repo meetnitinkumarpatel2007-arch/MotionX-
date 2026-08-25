@@ -19,6 +19,7 @@ export default function DashcamAI({ userId }) {
   const [isDanger, setIsDanger] = useState(false);
   const [alertMessage, setAlertMessage] = useState("MONITORING DRIVER");
   const [eyesOpen, setEyesOpen] = useState(true);
+  const [earValue, setEarValue] = useState("0.00"); // ADD THIS LINE
 
   const phoneStartRef = useRef(null);
   const eyesClosedStartRef = useRef(null);
@@ -129,7 +130,8 @@ export default function DashcamAI({ userId }) {
             const rightEAR = rightV / (2.0 * rightH);
 
             const EAR = (leftEAR + rightEAR) / 2.0;
-            if (EAR < 0.32) isEyesOpen = false; // Threshold for closed eyes
+            setEarValue(EAR.toFixed(2));
+            if (EAR < 0.45) isEyesOpen = false; // Threshold for closed eyes
           }
         } catch (err) { }
 
@@ -183,9 +185,10 @@ export default function DashcamAI({ userId }) {
           <span className="text-gray-400 font-mono text-sm font-bold tracking-widest">
             LOGIC: 
             <span className={eyesOpen ? "text-green-500 ml-2" : "text-red-500 ml-2 font-black animate-pulse"}>
-              {eyesOpen ? "(OPEN)" : "(CLOSED)"}
+              {eyesOpen ? "(OPEN)" : "(CLOSED)"} [EAR: {earValue}] {/* <-- Added [EAR: {earValue}] here */}
             </span>
           </span>
+
         </div>
 
         <span className={`text-sm font-black ${aiStatus.includes("ACTIVE") ? 'text-green-500 animate-pulse' : 'text-yellow-500 animate-pulse'}`}>
