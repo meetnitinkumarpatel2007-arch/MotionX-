@@ -3,18 +3,22 @@ import Webcam from "react-webcam";
 import Peer from 'peerjs';
 import { supabase } from './supabaseClient';
 
+// TENSORFLOW LOCAL EDGE AI
+import * as tf from '@tensorflow/tfjs';
+import '@tensorflow/tfjs-backend-webgl';
+import * as cocossd from '@tensorflow-models/coco-ssd';
+import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
+
 export default function DashcamAI({ userId }) {
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
-  const wsRef = useRef(null);
   const audioCtxRef = useRef(null);
   const isProcessingRef = useRef(false);
 
-  const [aiStatus, setAiStatus] = useState("CONNECTING TO AI CORE...");
+  const [aiStatus, setAiStatus] = useState("LOADING EDGE AI...");
   const [isDanger, setIsDanger] = useState(false);
   const [alertMessage, setAlertMessage] = useState("MONITORING DRIVER");
   const [eyesOpen, setEyesOpen] = useState(true);
-  const [isLocalMode, setIsLocalMode] = useState(false); // The Hackathon Turbo Toggle!
 
   const phoneStartRef = useRef(null);
   const eyesClosedStartRef = useRef(null);
@@ -44,114 +48,131 @@ export default function DashcamAI({ userId }) {
     });
     peer.on('call', (call) => {
       const stream = webcamRef.current?.video?.srcObject || webcamRef.current?.stream;
-      if (stream) {
-        call.answer(stream);
-      } else {
-        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-          .then(mediaStream => call.answer(mediaStream))
-          .catch(err => console.error("WebRTC Error:", err));
-      }
+      if (stream) call.answer(stream);
+      else navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then(mediaStream => call.answer(mediaStream));
     });
     return () => peer.destroy();
   }, [userId]);
 
+  // LOAD TENSORFLOW DIRECTLY INTO BROWSER MEMORY
   useEffect(() => {
-    // Dynamic URL switching based on the toggle!
-    const wsUrl = isLocalMode 
-      ? "ws://127.0.0.1:8000/ws/detect" 
-      : "wss://motionx-python-ai.onrender.com/ws/detect";
+    let isActive = true;
+    let objectDetector = null;
+    let faceDetector = null;
 
-    wsRef.current = new WebSocket(wsUrl);
+    const initAI = async () => {
+      try {
+        await tf.setBackend('webgl');
+        await tf.ready();
+        
+        // Load Phone/Bottle Detector
+        objectDetector = await cocossd.load();
+        
+        // Load Drowsiness Detector (Face Mesh)
+        const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
+        const detectorConfig = { runtime: 'tfjs', maxFaces: 1 };
+        faceDetector = await faceLandmarksDetection.createDetector(model, detectorConfig);
 
-    wsRef.current.onopen = () => setAiStatus(isLocalMode ? "● LOCAL AI LINKED" : "● CLOUD AI LINKED");
-    
-    wsRef.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      processAiData(data);
-      isProcessingRef.current = false; 
-    };
-
-    wsRef.current.onclose = () => setAiStatus("SERVER OFFLINE");
-
-    const interval = setInterval(() => {
-      if (wsRef.current?.readyState === WebSocket.OPEN && !isProcessingRef.current && webcamRef.current) {
-        // MAX FPS BOOST: Compressed 320x240 image for lightning-fast network transfer!
-        const imageSrc = webcamRef.current.getScreenshot({ width: 320, height: 240 });
-        if (imageSrc) {
-          isProcessingRef.current = true; 
-          wsRef.current.send(imageSrc);
+        if (isActive) {
+          setAiStatus("● EDGE AI ACTIVE");
+          startDetectionLoop();
         }
+      } catch (e) {
+        console.error("Failed to load Edge AI:", e);
+        setAiStatus("AI LOAD FAILED");
       }
-    }, 40); // MAX FPS BOOST: 40ms interval loop for near 25 FPS!
-
-    return () => {
-      clearInterval(interval);
-      wsRef.current?.close();
     };
-  }, [isLocalMode]); // Re-runs WebSocket connection if you click the toggle!
 
-  const processAiData = (data) => {
-    if (!webcamRef.current?.video) return;
-    const video = webcamRef.current.video;
-    const canvas = canvasRef.current;
-    
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const getDistance = (p1, p2) => Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
 
-    // MAX FPS BOOST: Correctly scales the 320px coordinates back up to your HD Canvas
-    const scaleX = canvas.width / 320;
-    const scaleY = canvas.height / 240;
+    const startDetectionLoop = async () => {
+      if (!isActive) return;
+      const video = webcamRef.current?.video;
 
-    let phoneDetected = false;
+      if (video && video.readyState === 4 && !isProcessingRef.current) {
+        isProcessingRef.current = true;
+        const canvas = canvasRef.current;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    data.objects.forEach(obj => {
-      const [x, y, w, h] = obj.box;
-      const label = obj.label;
-      const conf = obj.conf;
+        let phoneDetected = false;
+        let isEyesOpen = true;
 
-      let color = label === 'cell phone' ? '#dc2626' : (label === 'bottle' ? '#3b82f6' : '#22c55e'); 
-      ctx.strokeStyle = color; 
-      ctx.lineWidth = 4; 
-      // Apply scaling so boxes draw in the correct spot!
-      ctx.strokeRect(x * scaleX, y * scaleY, w * scaleX, h * scaleY);
-      ctx.fillStyle = color; 
-      ctx.font = 'bold 20px Arial';
-      ctx.fillText(`${label.toUpperCase()} ${(conf * 100).toFixed(0)}%`, x * scaleX, (y * scaleY) > 20 ? (y * scaleY) - 8 : 20);
+        try {
+          // 1. PHONE DETECTION
+          const objects = await objectDetector.detect(video);
+          objects.forEach(obj => {
+            if (obj.class === 'cell phone' || obj.class === 'bottle') {
+              if (obj.class === 'cell phone') phoneDetected = true;
+              ctx.strokeStyle = 'red';
+              ctx.lineWidth = 4;
+              ctx.strokeRect(...obj.bbox);
+              ctx.fillStyle = 'red';
+              ctx.font = 'bold 20px Arial';
+              ctx.fillText(`${obj.class.toUpperCase()} ${Math.round(obj.score * 100)}%`, obj.bbox[0], obj.bbox[1] > 20 ? obj.bbox[1] - 5 : 20);
+            }
+          });
 
-      if (label === 'cell phone') phoneDetected = true;
-    });
+          // 2. DROWSINESS DETECTION (EAR)
+          const faces = await faceDetector.estimateFaces(video);
+          if (faces.length > 0) {
+            const keypoints = faces[0].keypoints;
+            // Calculate Eye Aspect Ratio using 2D Euclidean Distance
+            const leftV = getDistance(keypoints[160], keypoints[144]) + getDistance(keypoints[158], keypoints[153]);
+            const leftH = getDistance(keypoints[33], keypoints[133]);
+            const leftEAR = leftV / (2.0 * leftH);
 
-    let phoneAlarm = false;
-    if (phoneDetected) {
-      if (!phoneStartRef.current) phoneStartRef.current = Date.now();
-      else if ((Date.now() - phoneStartRef.current) / 1000 > 5) { phoneAlarm = true; playBeep(1000, 150); }
-    } else { phoneStartRef.current = null; }
+            const rightV = getDistance(keypoints[385], keypoints[380]) + getDistance(keypoints[387], keypoints[373]);
+            const rightH = getDistance(keypoints[362], keypoints[263]);
+            const rightEAR = rightV / (2.0 * rightH);
 
-    const eyesDetected = data.eyes_detected;
-    setEyesOpen(eyesDetected);
-    
-    let drowsyAlarm = false;
-    if (!eyesDetected) {
-      if (!eyesClosedStartRef.current) eyesClosedStartRef.current = Date.now();
-      else if ((Date.now() - eyesClosedStartRef.current) / 1000 > 3) { drowsyAlarm = true; playBeep(1200, 120); }
-    } else { eyesClosedStartRef.current = null; }
+            const EAR = (leftEAR + rightEAR) / 2.0;
+            if (EAR < 0.25) isEyesOpen = false; // Threshold for closed eyes
+          }
+        } catch (err) { }
 
-    let currentStatus = "SAFE";
-    let msg = "MONITORING DRIVER";
+        setEyesOpen(isEyesOpen);
 
-    if (phoneAlarm) { setIsDanger(true); currentStatus = "PHONE DETECTED"; msg = "PHONE DETECTED (DISTRACTION)"; } 
-    else if (drowsyAlarm) { setIsDanger(true); currentStatus = "DROWSY"; msg = "DROWSINESS DETECTED!"; } 
-    else { setIsDanger(false); }
+        // ALARMS & TIMERS
+        let phoneAlarm = false;
+        if (phoneDetected) {
+          if (!phoneStartRef.current) phoneStartRef.current = Date.now();
+          else if ((Date.now() - phoneStartRef.current) / 1000 > 1.5) { phoneAlarm = true; playBeep(1000, 150); }
+        } else { phoneStartRef.current = null; }
+        
+        let drowsyAlarm = false;
+        if (!isEyesOpen) {
+          if (!eyesClosedStartRef.current) eyesClosedStartRef.current = Date.now();
+          else if ((Date.now() - eyesClosedStartRef.current) / 1000 > 1.5) { drowsyAlarm = true; playBeep(1200, 120); }
+        } else { eyesClosedStartRef.current = null; }
 
-    setAlertMessage(msg);
+        let currentStatus = "SAFE";
+        let msg = "MONITORING DRIVER";
 
-    if (currentStatus !== lastStatusRef.current && userId) {
-      lastStatusRef.current = currentStatus;
-      supabase.from('profiles').update({ ai_status: currentStatus }).eq('id', userId).then();
-    }
-  };
+        if (phoneAlarm) { setIsDanger(true); currentStatus = "PHONE DETECTED"; msg = "PHONE DETECTED (DISTRACTION)"; } 
+        else if (drowsyAlarm) { setIsDanger(true); currentStatus = "DROWSY"; msg = "DROWSINESS DETECTED!"; } 
+        else { setIsDanger(false); }
+
+        setAlertMessage(msg);
+
+        if (currentStatus !== lastStatusRef.current && userId) {
+          lastStatusRef.current = currentStatus;
+          supabase.from('profiles').update({ ai_status: currentStatus }).eq('id', userId).then();
+        }
+
+        isProcessingRef.current = false;
+      }
+      
+      // RUNS INSTANTLY WITH BROWSER REFRESH RATE (Smooth 30-60 FPS)
+      requestAnimationFrame(startDetectionLoop);
+    };
+
+    initAI();
+
+    return () => { isActive = false; };
+  }, [userId]);
 
   return (
     <div className={`absolute bottom-6 right-6 z-[999] bg-gray-900/95 backdrop-blur border-2 p-5 rounded-3xl w-[640px] transition-all duration-300 ${isDanger ? 'border-red-600 shadow-[0_0_60px_rgba(220,38,38,0.7)] scale-[1.02]' : 'border-blue-500/50 shadow-2xl'}`}>
@@ -159,15 +180,6 @@ export default function DashcamAI({ userId }) {
         <h3 className="font-black text-white text-lg tracking-widest uppercase">MotionX</h3>
         
         <div className="flex items-center gap-3">
-          {/* THE HACKATHON TOGGLE BUTTON */}
-          <button 
-            onClick={() => setIsLocalMode(!isLocalMode)}
-            className="text-[10px] font-black uppercase bg-gray-800 px-2 py-1 rounded border border-gray-600 hover:bg-gray-700 text-gray-300 transition-colors cursor-pointer"
-            title="Toggle Local/Cloud AI for 0ms Latency Demo"
-          >
-            {isLocalMode ? '🚀 LOCAL AI' : '☁️ CLOUD AI'}
-          </button>
-
           <span className="text-gray-400 font-mono text-sm font-bold tracking-widest">
             LOGIC: 
             <span className={eyesOpen ? "text-green-500 ml-2" : "text-red-500 ml-2 font-black animate-pulse"}>
@@ -176,12 +188,12 @@ export default function DashcamAI({ userId }) {
           </span>
         </div>
 
-        <span className={`text-sm font-black ${aiStatus.includes("LINKED") ? 'text-green-500 animate-pulse' : 'text-red-500'}`}>
+        <span className={`text-sm font-black ${aiStatus.includes("ACTIVE") ? 'text-green-500 animate-pulse' : 'text-yellow-500 animate-pulse'}`}>
           {aiStatus}
         </span>
       </div>
       <div className="relative rounded-2xl overflow-hidden border-2 border-gray-700 bg-black aspect-video shadow-inner">
-        <Webcam ref={webcamRef} audio={false} screenshotFormat="image/webp" screenshotQuality={0.5} className="absolute top-0 left-0 w-full h-full object-cover" mirrored={true} />
+        <Webcam ref={webcamRef} audio={false} className="absolute top-0 left-0 w-full h-full object-cover" mirrored={true} />
         <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full z-10" />
       </div>
       <div className={`mt-5 text-center text-sm font-black p-4 rounded-xl tracking-widest transition-colors ${isDanger ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-800 text-gray-400'}`}>
