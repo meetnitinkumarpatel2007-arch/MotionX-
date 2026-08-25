@@ -144,7 +144,7 @@ export default function DashcamAI({ userId }) {
             
             if (earTextRef.current) earTextRef.current.innerText = EAR.toFixed(2);
             
-            if (EAR < 0.32) isEyesOpen = false; // Threshold
+            if (EAR < 0.15) isEyesOpen = false; // Threshold
           } else {
             if (earTextRef.current) earTextRef.current.innerText = "NO FACE";
           }
