@@ -13,17 +13,18 @@ export default function DashcamAI({ userId }) {
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const audioCtxRef = useRef(null);
+  const earTextRef = useRef(null); // Bypasses React state to prevent freezing!
   const isProcessingRef = useRef(false);
 
   const [aiStatus, setAiStatus] = useState("LOADING EDGE AI...");
   const [isDanger, setIsDanger] = useState(false);
   const [alertMessage, setAlertMessage] = useState("MONITORING DRIVER");
   const [eyesOpen, setEyesOpen] = useState(true);
-  const [earValue, setEarValue] = useState("0.00"); // ADD THIS LINE
 
   const phoneStartRef = useRef(null);
   const eyesClosedStartRef = useRef(null);
   const lastStatusRef = useRef("SAFE");
+  const lastEyesOpenRef = useRef(true); // Tracks eye state without re-rendering
 
   const playBeep = (freq, durationMs) => {
     try {
@@ -66,10 +67,8 @@ export default function DashcamAI({ userId }) {
         await tf.setBackend('webgl');
         await tf.ready();
         
-        // Load Phone/Bottle Detector
         objectDetector = await cocossd.load();
         
-        // Load Drowsiness Detector (Face Mesh)
         const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
         const detectorConfig = { runtime: 'tfjs', maxFaces: 1 };
         faceDetector = await faceLandmarksDetection.createDetector(model, detectorConfig);
@@ -90,8 +89,10 @@ export default function DashcamAI({ userId }) {
       if (!isActive) return;
       const video = webcamRef.current?.video;
 
-      if (video && video.readyState === 4 && !isProcessingRef.current) {
+      // Lowered readyState to 2 so it starts faster on mobile!
+      if (video && video.readyState >= 2 && video.videoWidth > 0 && !isProcessingRef.current) {
         isProcessingRef.current = true;
+        
         const canvas = canvasRef.current;
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
@@ -107,10 +108,10 @@ export default function DashcamAI({ userId }) {
           objects.forEach(obj => {
             if (obj.class === 'cell phone' || obj.class === 'bottle') {
               if (obj.class === 'cell phone') phoneDetected = true;
-              ctx.strokeStyle = 'red';
+              ctx.strokeStyle = '#dc2626';
               ctx.lineWidth = 4;
               ctx.strokeRect(...obj.bbox);
-              ctx.fillStyle = 'red';
+              ctx.fillStyle = '#dc2626';
               ctx.font = 'bold 20px Arial';
               ctx.fillText(`${obj.class.toUpperCase()} ${Math.round(obj.score * 100)}%`, obj.bbox[0], obj.bbox[1] > 20 ? obj.bbox[1] - 5 : 20);
             }
@@ -120,7 +121,6 @@ export default function DashcamAI({ userId }) {
           const faces = await faceDetector.estimateFaces(video);
           if (faces.length > 0) {
             const keypoints = faces[0].keypoints;
-            // Calculate Eye Aspect Ratio using 2D Euclidean Distance
             const leftV = getDistance(keypoints[160], keypoints[144]) + getDistance(keypoints[158], keypoints[153]);
             const leftH = getDistance(keypoints[33], keypoints[133]);
             const leftEAR = leftV / (2.0 * leftH);
@@ -130,12 +130,13 @@ export default function DashcamAI({ userId }) {
             const rightEAR = rightV / (2.0 * rightH);
 
             const EAR = (leftEAR + rightEAR) / 2.0;
-            setEarValue(EAR.toFixed(2));
-            if (EAR < 0.45) isEyesOpen = false; // Threshold for closed eyes
+            
+            // Bypass React state - update the DOM text directly for 60fps smoothness!
+            if (earTextRef.current) earTextRef.current.innerText = EAR.toFixed(2);
+            
+            if (EAR < 0.40) isEyesOpen = false; // Tweak this number to your face
           }
-        } catch (err) { }
-
-        setEyesOpen(isEyesOpen);
+        } catch (err) { console.error(err); }
 
         // ALARMS & TIMERS
         let phoneAlarm = false;
@@ -153,21 +154,25 @@ export default function DashcamAI({ userId }) {
         let currentStatus = "SAFE";
         let msg = "MONITORING DRIVER";
 
-        if (phoneAlarm) { setIsDanger(true); currentStatus = "PHONE DETECTED"; msg = "PHONE DETECTED (DISTRACTION)"; } 
-        else if (drowsyAlarm) { setIsDanger(true); currentStatus = "DROWSY"; msg = "DROWSINESS DETECTED!"; } 
-        else { setIsDanger(false); }
+        if (phoneAlarm) { currentStatus = "PHONE DETECTED"; msg = "PHONE DETECTED (DISTRACTION)"; } 
+        else if (drowsyAlarm) { currentStatus = "DROWSY"; msg = "DROWSINESS DETECTED!"; } 
 
-        setAlertMessage(msg);
-
-        if (currentStatus !== lastStatusRef.current && userId) {
+        // ONLY UPDATE REACT IF THE STATUS ACTUALLY CHANGES (Saves CPU!)
+        if (currentStatus !== lastStatusRef.current) {
+          setIsDanger(currentStatus !== "SAFE");
+          setAlertMessage(msg);
           lastStatusRef.current = currentStatus;
-          supabase.from('profiles').update({ ai_status: currentStatus }).eq('id', userId).then();
+          if (userId) supabase.from('profiles').update({ ai_status: currentStatus }).eq('id', userId).then();
+        }
+
+        if (isEyesOpen !== lastEyesOpenRef.current) {
+          setEyesOpen(isEyesOpen);
+          lastEyesOpenRef.current = isEyesOpen;
         }
 
         isProcessingRef.current = false;
       }
       
-      // RUNS INSTANTLY WITH BROWSER REFRESH RATE (Smooth 30-60 FPS)
       requestAnimationFrame(startDetectionLoop);
     };
 
@@ -185,10 +190,9 @@ export default function DashcamAI({ userId }) {
           <span className="text-gray-400 font-mono text-sm font-bold tracking-widest">
             LOGIC: 
             <span className={eyesOpen ? "text-green-500 ml-2" : "text-red-500 ml-2 font-black animate-pulse"}>
-              {eyesOpen ? "(OPEN)" : "(CLOSED)"} [EAR: {earValue}] {/* <-- Added [EAR: {earValue}] here */}
+              {eyesOpen ? "(OPEN)" : "(CLOSED)"} [EAR: <span ref={earTextRef}>0.00</span>]
             </span>
           </span>
-
         </div>
 
         <span className={`text-sm font-black ${aiStatus.includes("ACTIVE") ? 'text-green-500 animate-pulse' : 'text-yellow-500 animate-pulse'}`}>
@@ -197,11 +201,13 @@ export default function DashcamAI({ userId }) {
       </div>
       <div className="relative rounded-2xl overflow-hidden border-2 border-gray-700 bg-black aspect-video shadow-inner">
         <Webcam ref={webcamRef} audio={false} className="absolute top-0 left-0 w-full h-full object-cover" mirrored={true} />
-        <canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full z-10" />
+        {/* ADDED CSS MIRRORING SO BOUNDING BOXES ALIGN CORRECTLY */}
+        <canvas ref={canvasRef} style={{ transform: 'scaleX(-1)' }} className="absolute top-0 left-0 w-full h-full z-10" />
       </div>
       <div className={`mt-5 text-center text-sm font-black p-4 rounded-xl tracking-widest transition-colors ${isDanger ? 'bg-red-600 text-white animate-pulse' : 'bg-gray-800 text-gray-400'}`}>
         {alertMessage}
       </div>
     </div>
   );
-}
+    }
+          
