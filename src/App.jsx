@@ -1,4 +1,3 @@
-```javascript
 import { useEffect, useState, useRef } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import L from 'leaflet'
@@ -135,10 +134,11 @@ export default function App() {
   // Locate nearest hospital with reliable fallback and timeout
   const findNearestHospital = async (lat, lng) => {
     try {
+      // FIX: Bypassing Vercel Rolldown compiler bug with standard string concatenation
       const query = '[out:json][timeout:5];node(around:8000,' + lat + ',' + lng + ')["amenity"="hospital"];out 1;';
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000);
-      const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, { signal: controller.signal });
+      const res = await fetch('https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query), { signal: controller.signal });
       clearTimeout(timeoutId);
       const data = await res.json();
       if (data.elements && data.elements.length > 0) {
@@ -179,9 +179,9 @@ export default function App() {
       const hospital = await findNearestHospital(myProfile.lat, myProfile.lng);
       setTargetHospital(hospital);
 
-      const osrmRes = await fetch(
-        `https://router.project-osrm.org/route/v1/driving/${myProfile.lng},${myProfile.lat};${hospital.coords[1]},${hospital.coords[0]}?overview=full&geometries=geojson`
-      );
+      // FIX: Bypassing Vercel compiler bug for OSRM URL
+      const osrmUrl = 'https://router.project-osrm.org/route/v1/driving/' + myProfile.lng + ',' + myProfile.lat + ';' + hospital.coords[1] + ',' + hospital.coords[0] + '?overview=full&geometries=geojson';
+      const osrmRes = await fetch(osrmUrl);
       const osrmData = await osrmRes.json();
 
       if (osrmData.routes && osrmData.routes.length > 0) {
@@ -208,21 +208,19 @@ export default function App() {
 
   const triggerOverride = () => enforceProfile((myProfile?.lat || 23.0625) + 0.002, (myProfile?.lng || 72.5314) + 0.002);
   
-  // UPGRADED: Continuous Real-Time GPS Tracking for Live V2X Updates
+  // Continuous Real-Time GPS Tracking
   const forceRealGPS = () => {
     if (!navigator.geolocation) {
       alert("Geolocation is not supported by your browser");
       return;
     }
     
-    // 1. Get initial position immediately
     navigator.geolocation.getCurrentPosition(
       (pos) => enforceProfile(pos.coords.latitude, pos.coords.longitude),
       (err) => alert("GPS Error: " + err.message),
       { enableHighAccuracy: true }
     );
 
-    // 2. Continously update Supabase every 5 seconds as the car drives
     setInterval(() => {
       navigator.geolocation.getCurrentPosition(
         (pos) => enforceProfile(pos.coords.latitude, pos.coords.longitude),
@@ -231,7 +229,7 @@ export default function App() {
       );
     }, 5000);
     
-    alert("Real-Time Continuous GPS Tracking Enabled! You are now live on the V2X grid.");
+    alert("Real-Time Continuous GPS Tracking Enabled!");
   };
 
   const testVoiceAlert = () => {
@@ -262,7 +260,7 @@ export default function App() {
     let retryInterval = null;
 
     const connectToDriver = () => {
-      if (peer) peer.destroy(); // Clean up old attempts
+      if (peer) peer.destroy(); 
       setIsVideoLive(false);
 
       peer = new Peer({ config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] }});
@@ -278,7 +276,9 @@ export default function App() {
           if(capture) dummyStream = capture.call(canvas, 1);
         } catch(e) { console.warn("Dummy stream failed", e); }
 
-        activeCall = peer.call(`motionx-driver-${linkedDriver.id}`, dummyStream);
+        // FIX: Bypassed Vercel bug by using string concatenation instead of backticks
+        const targetPeerId = 'motionx-driver-' + linkedDriver.id;
+        activeCall = peer.call(targetPeerId, dummyStream);
         
         if (activeCall) {
           activeCall.on('stream', (remoteStream) => {
@@ -300,10 +300,8 @@ export default function App() {
       });
     };
 
-    // Initial connection attempt
     connectToDriver();
 
-    // The Self-Healing Loop: Weak-Network Proof (8 seconds)
     retryInterval = setInterval(() => {
       const videoElement = remoteVideoRef.current;
       if (!videoElement || !videoElement.srcObject || !videoElement.srcObject.active) {
@@ -312,7 +310,7 @@ export default function App() {
       } else {
         setIsVideoLive(true);
       }
-    }, 8000);
+    }, 8000); // 8 seconds for weaker networks
 
     return () => {
       clearInterval(retryInterval);
@@ -418,7 +416,7 @@ export default function App() {
                   ? 'bg-red-100 text-red-700 border border-red-400 animate-pulse' 
                   : (nearestAmbDistance <= 1000 ? 'bg-amber-100 text-amber-800 border border-amber-400' : 'bg-blue-50 text-blue-700')
               }`}>
-                🚑 Active Amb: {nearestAmbDistance}m away
+                🚑 Active Amb: {nearestAmbDistance + 'm away'}
               </div>
             )}
 
@@ -436,7 +434,6 @@ export default function App() {
             SOS FAMILY SETUP
           </button>
 
-          {/* UPGRADED Ghost-Proof Modal */}
           {showSosModal && (
             <div className="absolute top-0 left-0 w-full h-full bg-black/80 z-[9999] flex items-center justify-center p-4">
               <div className="bg-gray-900 p-6 md:p-8 rounded-3xl border-2 border-blue-500 shadow-[0_0_50px_rgba(59,130,246,0.5)] text-center w-full max-w-md">
@@ -468,12 +465,12 @@ export default function App() {
           
           {v2xWarningLevel === 1 && (
             <div className="absolute top-3 md:top-6 left-1/2 -translate-x-1/2 z-[999] bg-yellow-500 text-black px-4 py-3 md:p-5 rounded-xl shadow-2xl animate-pulse text-sm md:text-lg font-black border-4 border-yellow-700 text-center w-[92%] max-w-lg">
-              ⚠️ AMBULANCE APPROACHING ({nearestAmbDistance !== null ? `${nearestAmbDistance}m` : '1KM'}) ⚠️ <br/> Clear Overtaking Lane!
+              ⚠️ AMBULANCE APPROACHING ({nearestAmbDistance !== null ? nearestAmbDistance + 'm' : '1KM'}) ⚠️ <br/> Clear Overtaking Lane!
             </div>
           )}
           {v2xWarningLevel === 2 && (
             <div className="absolute top-3 md:top-6 left-1/2 -translate-x-1/2 z-[999] bg-red-600 text-white px-4 py-3 md:p-5 rounded-xl shadow-2xl animate-pulse text-base md:text-xl font-black border-4 border-red-900 text-center w-[92%] max-w-lg">
-              🚨 AMBULANCE IMMINENT ({nearestAmbDistance !== null ? `${nearestAmbDistance}m` : '50m'}) 🚨 <br/> Pull Over Immediately!
+              🚨 AMBULANCE IMMINENT ({nearestAmbDistance !== null ? nearestAmbDistance + 'm' : '50m'}) 🚨 <br/> Pull Over Immediately!
             </div>
           )}
         </>
@@ -491,7 +488,7 @@ export default function App() {
             {isRouting 
               ? 'SCANNING FOR NEAREST HOSPITAL...' 
               : (myProfile.is_emergency && targetHospital 
-                  ? `ROUTING TO: ${targetHospital.name.toUpperCase()}` 
+                  ? 'ROUTING TO: ' + targetHospital.name.toUpperCase() 
                   : 'STANDBY MODE')}
           </p>
 
