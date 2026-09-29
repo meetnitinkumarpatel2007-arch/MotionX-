@@ -135,7 +135,7 @@ export default function App() {
   // Locate nearest hospital with reliable fallback and timeout
   const findNearestHospital = async (lat, lng) => {
     try {
-      const query = `[out:json][timeout:5];node(around:8000,${lat},${lng})["amenity"="hospital"];out 1;`;
+      const query = '[out:json][timeout:5];node(around:8000,' + lat + ',' + lng + ')["amenity"="hospital"];out 1;';
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 4000);
       const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`, { signal: controller.signal });
