@@ -3,76 +3,112 @@ import { supabase } from './supabaseClient'
 
 export default function Auth({ onLogin }) {
   const [loading, setLoading] = useState(false)
-  const [isRegistering, setIsRegistering] = useState(false)
+  const [isSignUp, setIsSignUp] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('private')
-  const [plateNumber, setPlateNumber] = useState('')
+  const [plateNumber, setPlateNumber] = useState('GJ-01-TEST')
+  const [errorMessage, setErrorMessage] = useState('')
 
-  const handleAuth = async () => {
+  const handleAuth = async (e) => {
+    e.preventDefault()
     setLoading(true)
-    try {
-      // Family viewers don't need a real plate, but vehicles do!
-      const finalPlate = role === 'family' ? 'SOS-VIEWER' : (plateNumber || 'UNKNOWN-PLATE');
-      let authUser = null;
+    setErrorMessage('')
 
-      if (isRegistering) {
-        const { data, error } = await supabase.auth.signUp({ email, password })
-        if (error) throw error
-        authUser = data.user;
-      } else {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-        if (error) throw error
-        authUser = data.user;
-      }
-
-      if (authUser) {
-        if (isRegistering) {
-          await supabase.from('profiles').upsert({ id: authUser.id, role: role, plate_number: finalPlate, lat: 23.0625, lng: 72.5314 });
-          onLogin(authUser, { id: authUser.id, role: role, plate_number: finalPlate, lat: 23.0625, lng: 72.5314 });
-        } else {
-          // On Login, fetch existing profile so we don't overwrite their original plate
-          const { data: existing } = await supabase.from('profiles').select('*').eq('id', authUser.id).single();
-          if (!existing) {
-             await supabase.from('profiles').upsert({ id: authUser.id, role: role, plate_number: finalPlate, lat: 23.0625, lng: 72.5314 });
+    if (isSignUp) {
+      // Pass the exact role and plate number to Supabase Auth Metadata
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            role: role,
+            plate_number: plateNumber
           }
-          onLogin(authUser, existing || { id: authUser.id, role: role, plate_number: finalPlate, lat: 23.0625, lng: 72.5314 });
         }
+      })
+
+      if (error) {
+        setErrorMessage(error.message)
+        setLoading(false)
+        return
       }
-    } catch (error) {
-      alert(error.message)
-    } finally {
-      setLoading(false)
+
+      if (data?.user) {
+        // TIMING FIX: Wait 1.5 seconds for the SQL Trigger to build the profile
+        setTimeout(async () => {
+          const { data: profile } = await supabase.from('profiles').select('*').eq('id', data.user.id).maybeSingle()
+          onLogin(data.user, profile)
+        }, 1500)
+      }
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) {
+        setErrorMessage(error.message)
+        setLoading(false)
+        return
+      }
+      if (data?.user) {
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', data.user.id).maybeSingle()
+        onLogin(data.user, profile)
+      }
     }
   }
 
   return (
-    <div className="flex flex-col h-screen items-center justify-center bg-gray-900 text-white font-sans p-4">
-      <div className="bg-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border-t-4 border-blue-500">
-        <h1 className="text-3xl font-black mb-2 text-center tracking-widest uppercase">MotionX</h1>
-        <p className="text-blue-400 font-bold text-center mb-6 text-sm tracking-widest uppercase">Smart V2X Ecosystem</p>
-        
-        {isRegistering && role !== 'family' && (
-          <input type="text" placeholder="License Plate (e.g. GJ 04 PR 1508)" value={plateNumber} onChange={(e) => setPlateNumber(e.target.value.toUpperCase())} className="w-full mb-4 p-4 rounded bg-gray-700 text-white font-bold outline-none border border-gray-600 focus:border-blue-500" />
-        )}
-        
-        <input type="email" placeholder="Email Address" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full mb-4 p-4 rounded bg-gray-700 text-white outline-none border border-gray-600 focus:border-blue-500" />
-        <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full mb-4 p-4 rounded bg-gray-700 text-white outline-none border border-gray-600 focus:border-blue-500" />
-        
-        <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full mb-6 p-4 rounded bg-gray-700 text-white outline-none border border-gray-600 font-bold uppercase tracking-wider">
-          <option value="private">Private Owner 🚘</option>
-          <option value="emergency">Emergency Unit 🚑</option>
-          <option value="fleet">Fleet / Government 🏢</option>
-          <option value="family">SOS Family Member 👨‍👩‍👧</option>
-        </select>
-        
-        <button onClick={handleAuth} disabled={loading} className="w-full bg-blue-600 hover:bg-blue-700 font-bold py-4 rounded-lg shadow-lg transition-all cursor-pointer">
-          {loading ? 'PROCESSING...' : (isRegistering ? 'REGISTER VEHICLE' : 'LOGIN TO DASHBOARD')}
-        </button>
+    <div className="flex h-[100dvh] w-screen items-center justify-center bg-gray-950 font-sans p-4">
+      <div className="w-full max-w-md bg-gray-900 border border-gray-800 p-8 rounded-3xl shadow-2xl">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-black text-white tracking-wider">MOTIONX</h1>
+          <p className="text-xs font-bold text-blue-400 uppercase tracking-widest mt-1">Smart V2X Ecosystem</p>
+        </div>
 
-        <p className="text-center mt-6 text-sm text-gray-400 font-bold cursor-pointer hover:text-white underline" onClick={() => setIsRegistering(!isRegistering)}>
-          {isRegistering ? "Already registered? Login here." : "Need to register? Click here."}
-        </p>
+        {errorMessage && (
+          <div className="mb-4 bg-red-950 border border-red-800 text-red-300 text-xs font-bold p-3 rounded-xl text-center">
+            {errorMessage}
+          </div>
+        )}
+
+        <form onSubmit={handleAuth} className="flex flex-col gap-4">
+          <div>
+            <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Email Address</label>
+            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="w-full p-3.5 bg-gray-800 border border-gray-700 text-white rounded-xl font-bold outline-none focus:border-blue-500" placeholder="user@motionx.com" />
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Password</label>
+            <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-3.5 bg-gray-800 border border-gray-700 text-white rounded-xl font-bold outline-none focus:border-blue-500" placeholder="........" />
+          </div>
+
+          {isSignUp && (
+            <>
+              <div>
+                <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Vehicle Role / Account Type</label>
+                <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full p-3.5 bg-gray-800 border border-gray-700 text-white rounded-xl font-bold outline-none focus:border-blue-500 cursor-pointer">
+                  <option value="private">Private Vehicle / Citizen</option>
+                  <option value="fleet">Fleet Management</option>
+                  <option value="emergency">Emergency / Ambulance Unit</option>
+                  <option value="family">SOS Family Tracker</option>
+                </select>
+              </div>
+              {role !== 'family' && (
+                <div>
+                  <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Plate Number / Unit ID</label>
+                  <input type="text" required value={plateNumber} onChange={(e) => setPlateNumber(e.target.value)} className="w-full p-3.5 bg-gray-800 border border-gray-700 text-white rounded-xl font-bold uppercase outline-none focus:border-blue-500" placeholder="GJ-01-AB-1234" />
+                </div>
+              )}
+            </>
+          )}
+
+          <button type="submit" disabled={loading} className="w-full mt-2 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black uppercase tracking-wider shadow-lg shadow-blue-600/30 transition-all active:scale-95 cursor-pointer">
+            {loading ? 'Processing...' : (isSignUp ? 'Register Account' : 'Secure Login')}
+          </button>
+        </form>
+
+        <div className="mt-6 text-center">
+          <button onClick={() => setIsSignUp(!isSignUp)} className="text-xs font-bold text-gray-400 hover:text-white underline cursor-pointer">
+            {isSignUp ? 'Already registered? Login here.' : 'Need an account? Register.'}
+          </button>
+        </div>
       </div>
     </div>
   )
