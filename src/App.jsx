@@ -87,7 +87,7 @@ export default function App() {
 
     setNearestAmbDistance(minDistance)
     if (currentWarningLevel > 0 && v2xWarningLevel === 0) {
-      const msg = currentWarningLevel === 2 ? "Ambulance Imminent. Pull over immediately." : "Please clear overtaking lane, ambulance is arriving.";
+      const msg = currentWarningLevel === 2 ? "Ambulance Imminent. Please clear overtaking lane, ambulance is arriving. " : "Please clear overtaking lane, ambulance is arriving.";
       window.speechSynthesis.speak(new SpeechSynthesisUtterance(msg))
     }
     setV2xWarningLevel(currentWarningLevel)
@@ -362,7 +362,7 @@ export default function App() {
           )}
           {v2xWarningLevel === 2 && (
             <div className="absolute top-3 md:top-6 left-1/2 -translate-x-1/2 z-[999] bg-red-600 text-white px-4 py-3 md:p-5 rounded-xl shadow-2xl animate-pulse text-base md:text-xl font-black border-4 border-red-900 text-center w-[92%] max-w-lg">
-              🚨 AMBULANCE IMMINENT ({nearestAmbDistance !== null ? nearestAmbDistance + 'm' : '50m'}) 🚨 <br/> Pull Over Immediately!
+              🚨 AMBULANCE IMMINENT ({nearestAmbDistance !== null ? nearestAmbDistance + 'm' : '50m'}) 🚨 <br/> Clear Overtaking Lane, Ambulance approaching.
             </div>
           )}
         </>
